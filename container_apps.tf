@@ -77,7 +77,22 @@ resource "azapi_resource" "app" {
             memory = var.memory
           }
           env = local.app_env
+          # All three probes are declared: a probe left out defaults to a TCP check on the MLLP port.
           probes = [
+            {
+              # The probe listener answers from the first moment, and /livez is live while the engine
+              # starts, so this passes as soon as the listener is up; up to 150 seconds after the delay.
+              type = "Startup"
+              httpGet = {
+                path   = "/livez"
+                port   = var.probes_port
+                scheme = "HTTP"
+              }
+              initialDelaySeconds = 5
+              periodSeconds       = 15
+              timeoutSeconds      = 5
+              failureThreshold    = 10
+            },
             {
               # A restart policy points at /livez: it answers stalled only when the engine loop has
               # made no step within its bound, and an engine still starting or stopping is live.

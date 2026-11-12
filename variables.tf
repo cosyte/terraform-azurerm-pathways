@@ -59,7 +59,7 @@ variable "slots" {
 }
 
 variable "mllp_ports" {
-  description = "The TCP ports the engine's MLLP sources listen on, each exposed on the same port number. The first is the app's main ingress port, the rest are additional port mappings: six at most (one plus five), never the reserved port 36985, never the probe port."
+  description = "The TCP ports the engine's MLLP sources listen on, each exposed on the same port number. The first is the app's main ingress port, the rest are additional port mappings: six at most (one plus five), never 80 or 443, never the reserved port 36985, never the probe port. Every exposed port, main or additional, is unique across the environment, and each slot has an environment of its own."
   type        = list(number)
 
   validation {
@@ -74,12 +74,17 @@ variable "mllp_ports" {
 
   validation {
     condition     = length(distinct(var.mllp_ports)) == length(var.mllp_ports)
-    error_message = "mllp_ports must not repeat a port: an exposed TCP port is unique across the environment."
+    error_message = "mllp_ports must not repeat a port: an exposed TCP port, main or additional, is unique across the environment."
   }
 
   validation {
     condition     = !contains(var.mllp_ports, 36985)
     error_message = "Port 36985 is reserved by Container Apps and cannot be exposed."
+  }
+
+  validation {
+    condition     = !contains(var.mllp_ports, 80) && !contains(var.mllp_ports, 443)
+    error_message = "Ports 80 and 443 belong to the environment's HTTP ingress and cannot be exposed as TCP ports."
   }
 
   validation {
@@ -89,7 +94,7 @@ variable "mllp_ports" {
 }
 
 variable "ingress_allowed_cidrs" {
-  description = "The address ranges allowed to reach the MLLP ports. Empty allows every address that can route to the environment, which is private to its virtual network unless internal_load_balancer_enabled is false."
+  description = "The address ranges allowed to reach the MLLP ports; every other address is denied. Empty allows every address that can route to the environment, which is private to its virtual network, and is refused when internal_load_balancer_enabled is false. A range covering every address (a /0, such as 0.0.0.0/0 or ::/0) is refused unless unsafe_allow_mllp_from_any_address is true."
   type        = list(string)
   default     = []
 
@@ -97,12 +102,28 @@ variable "ingress_allowed_cidrs" {
     condition     = alltrue([for c in var.ingress_allowed_cidrs : can(cidrhost(c, 0))])
     error_message = "Each entry of ingress_allowed_cidrs must be a CIDR range, such as 10.20.0.0/16."
   }
+
+  validation {
+    condition     = var.unsafe_allow_mllp_from_any_address || alltrue([for c in var.ingress_allowed_cidrs : !endswith(trimspace(c), "/0")])
+    error_message = "ingress_allowed_cidrs must not hold a range that covers every address (0.0.0.0/0, ::/0 or any /0): MLLP has no authentication and carries PHI. Name your senders' ranges, or set unsafe_allow_mllp_from_any_address = true if you mean it."
+  }
+}
+
+variable "unsafe_allow_mllp_from_any_address" {
+  description = "Allow a range that covers every address (0.0.0.0/0, ::/0) in ingress_allowed_cidrs. MLLP has no authentication of its own and carries PHI: with a public environment this opens the engine's intake to the whole internet. Leave it false."
+  type        = bool
+  default     = false
 }
 
 variable "internal_load_balancer_enabled" {
-  description = "Give each environment a private address in its virtual network and no public address. Turn it off only when senders reach the engine over the internet, and then set ingress_allowed_cidrs."
+  description = "Give each environment a private address in its virtual network and no public address. Turn it off only when senders reach the engine over the internet, and then name them in ingress_allowed_cidrs: a public environment with no allowed ranges is refused."
   type        = bool
   default     = true
+
+  validation {
+    condition     = var.internal_load_balancer_enabled || length(var.ingress_allowed_cidrs) > 0
+    error_message = "internal_load_balancer_enabled = false gives the environment a public address, and MLLP has no authentication and carries PHI: name the senders' address ranges in ingress_allowed_cidrs."
+  }
 }
 
 variable "probes_port" {
@@ -117,13 +138,13 @@ variable "probes_port" {
 }
 
 variable "drain_seconds" {
-  description = "How long the engine gets to stop after SIGTERM before it is killed: the termination grace period. On SIGTERM it turns /readyz to draining, closes its sources and gives each hook up to its timeout, so set this above your longest hook timeout. 0 to 600."
+  description = "The termination grace period: how long the engine gets to stop after SIGTERM before it is killed. On SIGTERM it turns /readyz to draining, closes its sources and gives each hook up to its timeout. 0 to 600, default 30, the platform's own default. Container Apps documents no maximum for this field, and its lifecycle page still says a container is killed 30 seconds after SIGTERM, so a value above 30 is not confirmed to be honored: test it in your environment before you rely on it."
   type        = number
   default     = 30
 
   validation {
     condition     = var.drain_seconds >= 0 && var.drain_seconds <= 600 && floor(var.drain_seconds) == var.drain_seconds
-    error_message = "drain_seconds must be a whole number of seconds from 0 to 600, the longest grace period Container Apps allows."
+    error_message = "drain_seconds must be a whole number of seconds from 0 to 600. 600 is this module's own bound: Container Apps documents none, and does not confirm a grace period above 30 seconds."
   }
 }
 
@@ -259,11 +280,13 @@ variable "postgres" {
 
 variable "key_vault" {
   description = <<-EOT
-    Key Vault networking. The vault denies every network by default. Terraform writes the
-    database-url secret, so the machine that applies needs a way in: a private endpoint
-    (private_endpoint_subnet_id and private_dns_zone_id, a zone named privatelink.vaultcore.azure.net)
-    for a runner inside the virtual network, or public_network_access_enabled with allowed_ip_ranges
-    naming the runner. The apps read the vault through the private endpoint.
+    Key Vault networking. The vault denies every network, and the apps and the machine that applies
+    (Terraform writes the database-url secret) both need a way in, so one of two is required: a
+    private endpoint (private_endpoint_subnet_id and private_dns_zone_id, a zone named
+    privatelink.vaultcore.azure.net), which the apps use from the virtual network, or
+    public_network_access_enabled with allowed_ip_ranges naming the runner and the environments'
+    outbound addresses. Container Apps is not a trusted Azure service, so the AzureServices bypass
+    does not let the apps in.
   EOT
   type = object({
     public_network_access_enabled = optional(bool, false)
@@ -287,5 +310,10 @@ variable "key_vault" {
   validation {
     condition     = length(var.key_vault.allowed_ip_ranges) == 0 || var.key_vault.public_network_access_enabled
     error_message = "key_vault.allowed_ip_ranges has no effect unless key_vault.public_network_access_enabled is true."
+  }
+
+  validation {
+    condition     = var.key_vault.private_endpoint_subnet_id != null || (var.key_vault.public_network_access_enabled && length(var.key_vault.allowed_ip_ranges) > 0)
+    error_message = "Nothing could reach the Key Vault: the apps could not read their secrets and the apply could not write database-url. Set key_vault.private_endpoint_subnet_id and key_vault.private_dns_zone_id (recommended), or set key_vault.public_network_access_enabled = true with key_vault.allowed_ip_ranges naming the runner and the environments' outbound addresses."
   }
 }
