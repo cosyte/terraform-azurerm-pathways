@@ -205,7 +205,7 @@ run "plans_three_mllp_ports_for_named_senders" {
 
 ```hcl title="examples/mllp-only/versions.tf"
 terraform {
-  required_version = ">= 1.9.0"
+  required_version = ">= 1.11.0"
 
   required_providers {
     azurerm = {
@@ -218,7 +218,7 @@ terraform {
     }
     random = {
       source  = "hashicorp/random"
-      version = ">= 3.6.0, < 4.0.0"
+      version = ">= 3.7.0, < 4.0.0"
     }
   }
 }

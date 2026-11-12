@@ -1,7 +1,7 @@
 # Pathways for production on one slot: one engine working and a second replica waiting as its warm
 # standby, a zone-redundant PostgreSQL server with a standby of its own in a second zone, a year of
-# logs, and the master key and the database URL in a Key Vault reached only through its private
-# endpoint. It runs in a virtual network you already have, named by id. Every name, id and range
+# logs, the master key and the database URL in a Key Vault reached only through its private
+# endpoint, and alerts on the engine's own metrics to an action group you already have. It runs in a virtual network you already have, named by id. Every name, id and range
 # here is a placeholder: replace them with your own. Nothing in this example is applied by our CI.
 
 provider "azurerm" {
@@ -47,6 +47,16 @@ variable "key_vault_private_dns_zone_id" {
 variable "sender_cidrs" {
   description = "The address ranges your MLLP senders connect from, inside or connected to the virtual network."
   type        = list(string)
+}
+
+variable "alarms_action_group_id" {
+  description = "The resource id of the Azure Monitor action group the alerts call: who is told, and how."
+  type        = string
+}
+
+variable "metrics_collector_image" {
+  description = "An OpenTelemetry collector image with the prometheus receiver, the filter, metricstransform and cumulativetodelta processors and the azuremonitor exporter, such as the OpenTelemetry Collector Contrib image, pinned by digest."
+  type        = string
 }
 
 variable "database_administrators" {
@@ -117,6 +127,14 @@ module "pathways" {
     private_dns_zone_id        = var.key_vault_private_dns_zone_id
   }
 
+  # Alerts on the engine's own metrics. pathways.yaml's health block listens on 127.0.0.1:9090 with
+  # plaintext: true and no auth, so it reads its token from PATHWAYS_HEALTH_TOKEN, which the module
+  # sets; the collector beside the engine reads /metrics there and sends five metrics to Application
+  # Insights. Each alert calls the action group on firing and on resolving.
+  alarms_enabled         = true
+  alarms_action_group_id = var.alarms_action_group_id
+  alarms_collector_image = var.metrics_collector_image
+
   tags = {
     environment = "production"
   }
@@ -130,4 +148,9 @@ output "slots" {
 output "postgres" {
   description = "The PostgreSQL server's host name, database and administrator login."
   value       = module.pathways.postgres
+}
+
+output "alarms" {
+  description = "The five metric alerts' ids and the Application Insights resource the metrics go to."
+  value       = module.pathways.alarms
 }

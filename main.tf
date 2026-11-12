@@ -16,6 +16,17 @@ locals {
       { for u, c in s.user_containers : "PATHWAYS_SFTP_${upper(u)}_CONTAINER" => c },
     )
   ])...)
+
+  # With alarms on, the collector beside the engine: its image, the alarms module's configuration and
+  # the two Key Vault secrets it reads. Without them, null, and the app is what it always was.
+  metrics_collector = one([
+    for a in module.alarms : {
+      image                       = var.alarms_collector_image
+      config                      = a.collector_config
+      health_token_secret_id      = a.health_token_secret_id
+      connection_string_secret_id = a.connection_string_secret_id
+    }
+  ])
 }
 
 # The identity the apps and the jobs run as.
@@ -112,6 +123,7 @@ module "container_apps" {
   log_analytics_workspace_id         = module.logs.id
   key_vault_uri                      = module.key_vault.uri
   database_url_secret_id             = module.key_vault.database_url_secret_id
+  metrics_collector                  = local.metrics_collector
 }
 
 # Optional, off by default: a storage account with SFTP for partners' files and the engine's own
@@ -139,4 +151,27 @@ module "storage" {
   sftp_users                    = var.storage.sftp_users
   blob_data_principal_id        = module.identity.principal_id
   log_analytics_workspace_id    = module.logs.id
+}
+
+# Optional, off by default: alerts on the engine's own metrics. A collector beside the engine (added
+# through container_apps above) reads /metrics with a token this module writes to the Key Vault, and
+# sends five metrics to Application Insights, where five metric alerts call your action group.
+module "alarms" {
+  source = "./modules/alarms"
+  count  = var.alarms_enabled ? 1 : 0
+
+  name                       = var.name
+  resource_group_name        = var.resource_group_name
+  location                   = var.location
+  tags                       = local.tags
+  log_analytics_workspace_id = module.logs.id
+  key_vault_id               = module.key_vault.secrets_writer_id
+  action_group_id            = var.alarms_action_group_id
+  health_port                = var.alarms_health_port
+  health_token_version       = var.alarms_health_token_version
+  store_down_minutes         = var.alarms_store_down_minutes
+  oldest_pending_age_seconds = var.alarms_oldest_pending_age_seconds
+  queue_depth_threshold      = var.alarms_queue_depth_threshold
+  refused_messages_threshold = var.alarms_refused_messages_threshold
+  settled_failed_threshold   = var.alarms_settled_failed_threshold
 }

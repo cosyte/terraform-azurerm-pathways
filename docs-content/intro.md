@@ -37,7 +37,8 @@ pinned by digest; the module does the rest.
   in the Pathways docs says how.
 - It does not create the virtual network, unless you start from the
   [complete example](./example-complete.md), which does.
-- It does not create alert rules yet: they wait for the metric names Pathways will publish.
+- It does not alert on the engine's metrics unless you ask: the alarms are off by default.
+  [Turn on the alarms](./turn-on-the-alarms.md) says what they cover and what they do not.
 - It is not released to a registry yet. Until it is, use it from GitHub by tag, as
   [Installation](./installation.md) shows.
 

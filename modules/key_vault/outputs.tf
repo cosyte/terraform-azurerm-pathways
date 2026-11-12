@@ -31,3 +31,10 @@ output "data_plane_id" {
 
   depends_on = [azurerm_private_endpoint.key_vault]
 }
+
+output "secrets_writer_id" {
+  description = "The Key Vault's resource id, ready only once whoever applies holds Key Vault Secrets Officer on it and its private endpoint (when there is one) exists, so a module that writes a secret to the vault, such as the alarms module, waits for both."
+  value       = azurerm_key_vault.this.id
+
+  depends_on = [azurerm_role_assignment.deployer_secrets_officer, azurerm_private_endpoint.key_vault]
+}

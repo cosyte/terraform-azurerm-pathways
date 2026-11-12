@@ -2,6 +2,24 @@
 
 ## Unreleased (patch)
 
+- Alarms on the engine's own metrics, off by default (`alarms_enabled`): with it off the module plans
+  what it did before. On, an OpenTelemetry collector runs beside the engine in each replica
+  (`alarms_collector_image`, pinned by digest), reads `/metrics` on the engine's health endpoint at
+  127.0.0.1 with a bearer token the module generates into the Key Vault secret
+  `pathways-health-token` and gives to the engine as `PATHWAYS_HEALTH_TOKEN` and to the collector
+  (neither the plan nor the state holds it), and sends five metrics with no channel or destination
+  label to a workspace-based Application Insights resource. Five Azure Monitor metric alerts call
+  `alarms_action_group_id`: store down, oldest pending age, queue depth, refused messages and
+  settled destinations failing, each threshold an input. Azure does not fire a metric alert on
+  missing data, so a stopped engine or collector does not fire store down, and its window is 1, 5,
+  15, 30 or 60 minutes (5 by default). A new `modules/alarms`, a `metrics_collector` input on
+  `modules/container_apps`, a `secrets_writer_id` output on `modules/key_vault`, the root output
+  `alarms`, the alarms on in `examples/production`, and a "Turn on the alarms" page. To turn them
+  on, add a `health:` block on `alarms_health_port` (9090) with `plaintext: true` to your
+  `pathways.yaml`.
+- What a caller must change: Terraform 1.11 or later (was 1.9), for the write-only argument that
+  keeps the health token out of the state, and `hashicorp/random` 3.7 or later (was 3.6), for the
+  ephemeral resource that generates it. No input or output a caller passes today changes.
 - Examples, one folder per deployment shape, each with a README that says what it builds, when to
   choose it, what it costs and what it does not cover, a page on docs.cosyte.com, and a test that
   plans it against mocked providers in CI: `basic` (minimal), `production` (one engine with a warm

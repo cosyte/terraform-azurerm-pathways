@@ -562,3 +562,138 @@ variable "storage" {
     error_message = "With storage enabled, the module sets AZURE_CLIENT_ID, PATHWAYS_AZBLOB_ACCOUNT, PATHWAYS_AZBLOB_CONTAINER and PATHWAYS_SFTP_<USER>_CONTAINER on the app: do not pass them in environment_variables."
   }
 }
+
+variable "alarms_enabled" {
+  description = "Whether to alert on the engine's own metrics (modules/alarms): an OpenTelemetry collector beside the engine in each replica reads /metrics on the health endpoint with a token the module generates, keeps five metrics with no channel or destination name, and sends them to a workspace-based Application Insights resource, and five Azure Monitor metric alerts call alarms_action_group_id. Your pathways.yaml needs a health block on alarms_health_port. Azure bills for the collector's vCPU and memory, the alert rules, the metrics' data in the workspace and the two Key Vault secrets' reads. Off by default: nothing is created and nothing is billed until you turn it on."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.alarms_enabled || !contains(concat(keys(var.environment_variables), keys(var.encryption_key_secrets)), "PATHWAYS_HEALTH_TOKEN")
+    error_message = "With alarms_enabled the module generates the health endpoint's token and gives it to the engine as PATHWAYS_HEALTH_TOKEN: leave it out of environment_variables and encryption_key_secrets."
+  }
+
+  validation {
+    condition     = !var.alarms_enabled || length(setintersection(toset(concat(values(var.encryption_key_secrets), [try(var.existing_postgres.database_url_secret_name, "")])), toset(["pathways-health-token", "pathways-metrics-connection-string"]))) == 0
+    error_message = "With alarms_enabled the module writes the Key Vault secrets pathways-health-token and pathways-metrics-connection-string: name no master key or database URL secret after them."
+  }
+
+  validation {
+    condition     = !var.alarms_enabled || var.cpu <= 3.75
+    error_message = "With alarms_enabled, cpu must be 3.75 or less: the collector takes 0.25 vCPU, and an app on the Consumption profile gets 4 vCPU at most."
+  }
+}
+
+variable "alarms_action_group_id" {
+  description = "The resource id of the Azure Monitor action group the alerts call when they fire and when they resolve. Required when alarms_enabled is true. You create the action group and its receivers (email, SMS, a webhook, and so on)."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.alarms_action_group_id == null || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Insights/actionGroups/[^/]+$", var.alarms_action_group_id))
+    error_message = "alarms_action_group_id must be the resource id of an action group, such as /subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Insights/actionGroups/<name>."
+  }
+
+  validation {
+    condition     = !var.alarms_enabled || var.alarms_action_group_id != null
+    error_message = "alarms_enabled needs alarms_action_group_id: the alerts call an action group you create."
+  }
+}
+
+variable "alarms_collector_image" {
+  description = "The metrics collector's image, pinned by digest: an OpenTelemetry collector with the prometheus receiver, the filter, metricstransform and cumulativetodelta processors and the azuremonitor exporter, such as the OpenTelemetry Collector Contrib image, otel/opentelemetry-collector-contrib:<version>@sha256:<digest>. Required when alarms_enabled is true. A tag alone is refused."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.alarms_collector_image == null || can(regex("^[^\\s@]+@sha256:[0-9a-f]{64}$", var.alarms_collector_image))
+    error_message = "alarms_collector_image must be pinned by digest: registry/repository:tag@sha256:<64 hex digits>."
+  }
+
+  validation {
+    condition     = !var.alarms_enabled || var.alarms_collector_image != null
+    error_message = "alarms_enabled needs alarms_collector_image, the collector's image pinned by digest."
+  }
+}
+
+variable "alarms_health_port" {
+  description = "The port of the engine's health endpoint, the health block of your pathways.yaml, which serves /metrics. The collector reads it at 127.0.0.1 inside the replica, so the block keeps its default host, 127.0.0.1, with plaintext: true; no ingress points at the port, and nothing outside the replica reaches it. Used when alarms_enabled is true."
+  type        = number
+  default     = 9090
+
+  validation {
+    condition     = var.alarms_health_port >= 1 && var.alarms_health_port <= 65535 && floor(var.alarms_health_port) == var.alarms_health_port
+    error_message = "alarms_health_port must be a whole port from 1 to 65535."
+  }
+
+  validation {
+    condition     = !var.alarms_enabled || !contains(concat(var.mllp_ports, [var.probes_port], var.http_port == null ? [] : [var.http_port]), var.alarms_health_port)
+    error_message = "alarms_health_port needs a port of its own: not an MLLP port, the HTTP port or the probe port."
+  }
+}
+
+variable "alarms_health_token_version" {
+  description = "Raise this by one to write a new health token: the module generates one and writes it to its Key Vault secret, and neither the plan nor the state ever holds it. The engine and the collector read it when a replica starts, so restart the app's revision after you raise it."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.alarms_health_token_version >= 1 && floor(var.alarms_health_token_version) == var.alarms_health_token_version
+    error_message = "alarms_health_token_version must be a whole number, 1 or more."
+  }
+}
+
+variable "alarms_store_down_minutes" {
+  description = "The store down alert fires when no reading of pathways_store_up was 1 for this many minutes: 1, 5, 15, 30 or 60, the windows Azure Monitor takes for a metric alert. Missing readings do not count: Azure does not fire a metric alert on missing data, so an engine or a collector that stopped reporting does not fire it."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = contains([1, 5, 15, 30, 60], var.alarms_store_down_minutes)
+    error_message = "alarms_store_down_minutes must be 1, 5, 15, 30 or 60: Azure Monitor takes a metric alert's window only from a fixed list."
+  }
+}
+
+variable "alarms_oldest_pending_age_seconds" {
+  description = "The oldest pending age alert fires when the oldest delivery waiting on any destination has waited longer than this, in seconds, in every reading for 5 minutes."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.alarms_oldest_pending_age_seconds >= 0
+    error_message = "alarms_oldest_pending_age_seconds must be 0 or more."
+  }
+}
+
+variable "alarms_queue_depth_threshold" {
+  description = "The queue depth alert fires when the deliveries pending, over every destination, number more than this in every reading for 5 minutes."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.alarms_queue_depth_threshold >= 0 && floor(var.alarms_queue_depth_threshold) == var.alarms_queue_depth_threshold
+    error_message = "alarms_queue_depth_threshold must be a whole number, 0 or more."
+  }
+}
+
+variable "alarms_refused_messages_threshold" {
+  description = "The refused messages alert fires when the bodies the sources refused (unreadable or rejected, all channels together) number more than this in 15 minutes. 0 fires on the first one."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.alarms_refused_messages_threshold >= 0 && floor(var.alarms_refused_messages_threshold) == var.alarms_refused_messages_threshold
+    error_message = "alarms_refused_messages_threshold must be a whole number, 0 or more."
+  }
+}
+
+variable "alarms_settled_failed_threshold" {
+  description = "The settled destinations failing alert fires when the messages that settled as failed with a destination (all channels and destinations together) number more than this in 15 minutes. 0 fires on the first one."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.alarms_settled_failed_threshold >= 0 && floor(var.alarms_settled_failed_threshold) == var.alarms_settled_failed_threshold
+    error_message = "alarms_settled_failed_threshold must be a whole number, 0 or more."
+  }
+}

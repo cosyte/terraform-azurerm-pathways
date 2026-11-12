@@ -304,3 +304,29 @@ variable "database_url_secret_id" {
   description = "The versionless id of the Key Vault secret that holds the engine's database URL. The app and the migrate job read it as PATHWAYS_DATABASE_URL."
   type        = string
 }
+
+variable "metrics_collector" {
+  description = "A metrics collector to run beside the engine in each replica of each slot's app, which reads the engine's /metrics over the replica's loopback: its image, pinned by digest; its configuration (passed as PATHWAYS_COLLECTOR_CONFIG and read with --config=env:PATHWAYS_COLLECTOR_CONFIG, as an OpenTelemetry collector takes it); and the versionless ids of two Key Vault secrets, the health endpoint's bearer token, which the app gives the engine and the collector as PATHWAYS_HEALTH_TOKEN, and the Application Insights connection string, which it gives the collector as APPLICATIONINSIGHTS_CONNECTION_STRING. The collector takes 0.25 vCPU and 0.5Gi beside the engine's cpu and memory. The migrate job does not get it. Null, the default, runs the engine alone."
+  type = object({
+    image                       = string
+    config                      = string
+    health_token_secret_id      = string
+    connection_string_secret_id = string
+  })
+  default = null
+
+  validation {
+    condition     = var.metrics_collector == null || can(regex("^[^\\s@]+@sha256:[0-9a-f]{64}$", var.metrics_collector.image))
+    error_message = "metrics_collector.image must be pinned by digest: registry/repository:tag@sha256:<64 hex digits>."
+  }
+
+  validation {
+    condition     = var.metrics_collector == null || !contains(concat(keys(var.environment_variables), keys(var.encryption_key_secrets)), "PATHWAYS_HEALTH_TOKEN")
+    error_message = "With metrics_collector the engine reads PATHWAYS_HEALTH_TOKEN from its Key Vault secret: leave it out of environment_variables and encryption_key_secrets."
+  }
+
+  validation {
+    condition     = var.metrics_collector == null || var.cpu <= 3.75
+    error_message = "With metrics_collector, cpu must be 3.75 or less: the collector takes 0.25 vCPU, and an app on the Consumption profile gets 4 vCPU at most."
+  }
+}

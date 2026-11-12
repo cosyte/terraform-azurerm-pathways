@@ -15,10 +15,10 @@ This page is generated from the code in the repository root by `scripts/docs.sh`
 
 | Name | Version |
 | --- | --- |
-| `terraform` | `>= 1.9.0` |
+| `terraform` | `>= 1.11.0` |
 | `azapi` | `>= 2.0.0, < 3.0.0` |
 | `azurerm` | `>= 4.42.0, < 5.0.0` |
-| `random` | `>= 3.6.0, < 4.0.0` |
+| `random` | `>= 3.7.0, < 4.0.0` |
 
 ## Modules
 
@@ -30,10 +30,11 @@ This page is generated from the code in the repository root by `scripts/docs.sh`
 | `key_vault` | `./modules/key_vault` |
 | `container_apps` | `./modules/container_apps` |
 | `storage` | `./modules/storage` |
+| `alarms` | `./modules/alarms` |
 
 ## Inputs
 
-26 inputs, 4 of them required. The required ones come first, then the rest by name.
+36 inputs, 4 of them required. The required ones come first, then the rest by name.
 
 ### `location`
 
@@ -96,6 +97,191 @@ The plan refuses a value that breaks one of these rules, with its message:
 - Each slot name must be 1 to 5 lowercase letters or digits, starting with a letter.
 - Each slot's image must be pinned by digest: registry/repository:tag@sha256:\<64 hex digits\>.
 - Each slot needs its own infrastructure subnet: one subnet holds one Container Apps environment.
+
+### `alarms_action_group_id`
+
+Optional.
+
+The resource id of the Azure Monitor action group the alerts call when they fire and when they resolve. Required when alarms\_enabled is true. You create the action group and its receivers (email, SMS, a webhook, and so on).
+
+Type:
+
+```hcl
+string
+```
+
+Default: `null`
+
+The plan refuses a value that breaks one of these rules, with its message:
+
+- alarms\_action\_group\_id must be the resource id of an action group, such as /subscriptions/\<id\>/resourceGroups/\<group\>/providers/Microsoft.Insights/actionGroups/\<name\>.
+- alarms\_enabled needs alarms\_action\_group\_id: the alerts call an action group you create.
+
+### `alarms_collector_image`
+
+Optional.
+
+The metrics collector's image, pinned by digest: an OpenTelemetry collector with the prometheus receiver, the filter, metricstransform and cumulativetodelta processors and the azuremonitor exporter, such as the OpenTelemetry Collector Contrib image, otel/opentelemetry-collector-contrib:\<version\>@sha256:\<digest\>. Required when alarms\_enabled is true. A tag alone is refused.
+
+Type:
+
+```hcl
+string
+```
+
+Default: `null`
+
+The plan refuses a value that breaks one of these rules, with its message:
+
+- alarms\_collector\_image must be pinned by digest: registry/repository:tag@sha256:\<64 hex digits\>.
+- alarms\_enabled needs alarms\_collector\_image, the collector's image pinned by digest.
+
+### `alarms_enabled`
+
+Optional.
+
+Whether to alert on the engine's own metrics (modules/alarms): an OpenTelemetry collector beside the engine in each replica reads /metrics on the health endpoint with a token the module generates, keeps five metrics with no channel or destination name, and sends them to a workspace-based Application Insights resource, and five Azure Monitor metric alerts call alarms\_action\_group\_id. Your pathways.yaml needs a health block on alarms\_health\_port. Azure bills for the collector's vCPU and memory, the alert rules, the metrics' data in the workspace and the two Key Vault secrets' reads. Off by default: nothing is created and nothing is billed until you turn it on.
+
+Type:
+
+```hcl
+bool
+```
+
+Default: `false`
+
+The plan refuses a value that breaks one of these rules, with its message:
+
+- With alarms\_enabled the module generates the health endpoint's token and gives it to the engine as PATHWAYS\_HEALTH\_TOKEN: leave it out of environment\_variables and encryption\_key\_secrets.
+- With alarms\_enabled the module writes the Key Vault secrets pathways-health-token and pathways-metrics-connection-string: name no master key or database URL secret after them.
+- With alarms\_enabled, cpu must be 3.75 or less: the collector takes 0.25 vCPU, and an app on the Consumption profile gets 4 vCPU at most.
+
+### `alarms_health_port`
+
+Optional.
+
+The port of the engine's health endpoint, the health block of your pathways.yaml, which serves /metrics. The collector reads it at 127.0.0.1 inside the replica, so the block keeps its default host, 127.0.0.1, with plaintext: true; no ingress points at the port, and nothing outside the replica reaches it. Used when alarms\_enabled is true.
+
+Type:
+
+```hcl
+number
+```
+
+Default: `9090`
+
+The plan refuses a value that breaks one of these rules, with its message:
+
+- alarms\_health\_port must be a whole port from 1 to 65535.
+- alarms\_health\_port needs a port of its own: not an MLLP port, the HTTP port or the probe port.
+
+### `alarms_health_token_version`
+
+Optional.
+
+Raise this by one to write a new health token: the module generates one and writes it to its Key Vault secret, and neither the plan nor the state ever holds it. The engine and the collector read it when a replica starts, so restart the app's revision after you raise it.
+
+Type:
+
+```hcl
+number
+```
+
+Default: `1`
+
+The plan refuses a value that breaks this rule, with this message:
+
+- alarms\_health\_token\_version must be a whole number, 1 or more.
+
+### `alarms_oldest_pending_age_seconds`
+
+Optional.
+
+The oldest pending age alert fires when the oldest delivery waiting on any destination has waited longer than this, in seconds, in every reading for 5 minutes.
+
+Type:
+
+```hcl
+number
+```
+
+Default: `600`
+
+The plan refuses a value that breaks this rule, with this message:
+
+- alarms\_oldest\_pending\_age\_seconds must be 0 or more.
+
+### `alarms_queue_depth_threshold`
+
+Optional.
+
+The queue depth alert fires when the deliveries pending, over every destination, number more than this in every reading for 5 minutes.
+
+Type:
+
+```hcl
+number
+```
+
+Default: `1000`
+
+The plan refuses a value that breaks this rule, with this message:
+
+- alarms\_queue\_depth\_threshold must be a whole number, 0 or more.
+
+### `alarms_refused_messages_threshold`
+
+Optional.
+
+The refused messages alert fires when the bodies the sources refused (unreadable or rejected, all channels together) number more than this in 15 minutes. 0 fires on the first one.
+
+Type:
+
+```hcl
+number
+```
+
+Default: `0`
+
+The plan refuses a value that breaks this rule, with this message:
+
+- alarms\_refused\_messages\_threshold must be a whole number, 0 or more.
+
+### `alarms_settled_failed_threshold`
+
+Optional.
+
+The settled destinations failing alert fires when the messages that settled as failed with a destination (all channels and destinations together) number more than this in 15 minutes. 0 fires on the first one.
+
+Type:
+
+```hcl
+number
+```
+
+Default: `0`
+
+The plan refuses a value that breaks this rule, with this message:
+
+- alarms\_settled\_failed\_threshold must be a whole number, 0 or more.
+
+### `alarms_store_down_minutes`
+
+Optional.
+
+The store down alert fires when no reading of pathways\_store\_up was 1 for this many minutes: 1, 5, 15, 30 or 60, the windows Azure Monitor takes for a metric alert. Missing readings do not count: Azure does not fire a metric alert on missing data, so an engine or a collector that stopped reporting does not fire it.
+
+Type:
+
+```hcl
+number
+```
+
+Default: `5`
+
+The plan refuses a value that breaks this rule, with this message:
+
+- alarms\_store\_down\_minutes must be 1, 5, 15, 30 or 60: Azure Monitor takes a metric alert's window only from a fixed list.
 
 ### `app_start_args`
 
@@ -538,7 +724,11 @@ Default: `false`
 
 ## Outputs
 
-10 outputs, by name.
+11 outputs, by name.
+
+### `alarms`
+
+With alarms on: the ids of the five metric alerts by key (store\_down, oldest\_pending\_age, queue\_depth, refused\_messages, settled\_failed), the Application Insights resource the metrics go to, and the name of the Key Vault secret that holds the health token. Null with alarms off. The token itself is in no output, no plan and no state.
 
 ### `database_url_secret_name`
 
