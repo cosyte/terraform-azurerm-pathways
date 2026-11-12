@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # terraform init -backend=false and terraform validate in the module root, in each module under
-# modules/ (on its own, as a caller who uses it alone would) and in each folder under examples/.
+# modules/ (on its own, as a caller who uses it alone would) and in each folder under examples/ that
+# holds Terraform (a shape that is not supported yet has a README.md alone, and tests/run.sh checks it).
 # Needs no credentials: validate reads the configuration and the provider schemas only. Removes each
 # .terraform/ and lock file it makes, so no lock file is committed.
 #
@@ -23,7 +24,9 @@ done < <(find modules -mindepth 1 -maxdepth 1 -type d | sort)
 
 examples=()
 while IFS= read -r d; do
-  examples+=("$d")
+  if compgen -G "${d}/*.tf" > /dev/null; then
+    examples+=("$d")
+  fi
 done < <(find examples -mindepth 1 -maxdepth 1 -type d | sort)
 
 if [ "${#modules[@]}" -eq 0 ]; then

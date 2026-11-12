@@ -39,9 +39,11 @@ module "logs" {
   retention_days      = var.log_retention_days
 }
 
-# The PostgreSQL flexible server, private access only, and the database URL.
+# The PostgreSQL flexible server, private access only, and the database URL. None with
+# existing_postgres: the URL of a server you already run is a secret you put in the Key Vault.
 module "database" {
   source = "./modules/database"
+  count  = var.postgres == null ? 0 : 1
 
   name                           = var.name
   resource_group_name            = var.resource_group_name
@@ -74,7 +76,9 @@ module "key_vault" {
   soft_delete_retention_days    = var.key_vault.soft_delete_retention_days
   secrets_reader_principal_id   = module.identity.principal_id
   log_analytics_workspace_id    = module.logs.id
-  database_url                  = module.database.database_url
+  database_url                  = one(module.database[*].database_url)
+
+  existing_database_url_secret_name = try(var.existing_postgres.database_url_secret_name, null)
 }
 
 # Per slot: the Container Apps environment, the Pathways app and the migrate job.
@@ -102,6 +106,8 @@ module "container_apps" {
   app_start_args                     = var.app_start_args
   migrate_args                       = var.migrate_args
   migrate_timeout_seconds            = var.migrate_timeout_seconds
+  http_port                          = var.http_port
+  standby_replica                    = var.standby_replica
   identity_id                        = module.identity.id
   log_analytics_workspace_id         = module.logs.id
   key_vault_uri                      = module.key_vault.uri

@@ -3,7 +3,8 @@
 #
 #   fmt            terraform fmt -check over the root, the modules, the examples and the tests
 #   validate       terraform init -backend=false and validate, in the root, each module and each example
-#   test           tests/run.sh: terraform test in the root and each module, mocked providers, plan only
+#   test           tests/run.sh: terraform test in the root, each module and each example, mocked
+#                  providers, plan only
 #   policy         scripts/policy.sh: tflint with the azurerm ruleset, and trivy config
 #   actionlint     every workflow file
 #   docs           docs-content/: scripts/docs.py's own tests, scripts/docs.sh --check (the reference of
@@ -80,7 +81,7 @@ jobs:
         with:
           terraform_version: ${{ steps.tf_version.outputs.value }}
           terraform_wrapper: false
-      - name: terraform test, the root and each module, mocked providers, plan only
+      - name: terraform test, the root, each module and each example, mocked providers, plan only
         run: tests/run.sh
 
   policy:

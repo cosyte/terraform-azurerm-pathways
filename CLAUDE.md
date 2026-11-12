@@ -37,9 +37,10 @@ change to an input, an output or an example is committed with the pages `scripts
 `scripts/validate.sh` runs `terraform init -backend=false` and `terraform validate` in the root module,
 in each module under `modules/` and in each example. `scripts/policy.sh` runs tflint with the azurerm
 ruleset (pinned in `.tflint.hcl`) and `trivy config` at HIGH and CRITICAL. `tests/run.sh` runs
-`terraform test` in the root module and in each module under `modules/`, against mocked azurerm and
+`terraform test` in the root module, in each module under `modules/` and in each example under `examples/`, against mocked azurerm and
 azapi providers, plan only, with every Azure credential variable unset; it refuses a run block that
-does not plan, a module without tests, and a test file that does not mock a provider its module
+does not plan, a module or an example without tests, an example folder with no Terraform that holds
+anything but a README.md (a shape not supported yet), and a test file that does not mock a provider its module
 requires. None of them needs or reads an Azure credential.
 
 CI runs the same checks on every pull request: `fmt`, `validate`, `test`, `policy`, `actionlint` and

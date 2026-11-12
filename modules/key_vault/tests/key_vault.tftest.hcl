@@ -58,7 +58,7 @@ run "defaults_are_private_and_audited" {
   }
 
   assert {
-    condition     = azurerm_key_vault_secret.database_url.name == "database-url"
+    condition     = azurerm_key_vault_secret.database_url[0].name == "database-url"
     error_message = "The database URL must be written to the database-url secret."
   }
 

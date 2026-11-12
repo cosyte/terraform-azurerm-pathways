@@ -46,8 +46,17 @@ locals {
     }
   ]
 
-  main_port        = var.mllp_ports[0]
-  additional_ports = slice(var.mllp_ports, 1, length(var.mllp_ports))
+  http_ingress     = var.http_port != null
+  main_port        = local.http_ingress ? var.http_port : var.mllp_ports[0]
+  additional_ports = local.http_ingress ? [] : slice(var.mllp_ports, 1, length(var.mllp_ports))
+
+  # With a warm standby, both replicas start with --standby: the first to ask takes the engine lease
+  # at once, and the other waits for it. The image's own command is pathways start -C /project.
+  start_args = var.standby_replica ? concat(
+    coalesce(var.app_start_args, ["start", "-C", "/project"]),
+    contains(coalesce(var.app_start_args, ["start"]), "--standby") ? [] : ["--standby"],
+  ) : var.app_start_args
+  replicas = var.standby_replica ? 2 : 1
 }
 
 # One environment per slot. A TCP port is unique across an environment, so blue and green each get
@@ -96,14 +105,18 @@ resource "azapi_resource" "app" {
       workloadProfileName = local.workload_profile
       configuration = {
         activeRevisionsMode = "Single"
+        # TCP for MLLP, each port exposed on its own number; or HTTP, where Container Apps ends TLS on
+        # 443 and passes plain HTTP to http_port, and refuses plain HTTP from outside. A key set to
+        # null is left out of the request.
         ingress = {
           # external means reachable from outside the environment: from the virtual network when the
           # environment's load balancer is internal, the default.
-          external    = true
-          transport   = "tcp"
-          targetPort  = local.main_port
-          exposedPort = local.main_port
-          additionalPortMappings = [
+          external      = true
+          transport     = local.http_ingress ? "http" : "tcp"
+          targetPort    = local.main_port
+          exposedPort   = local.http_ingress ? null : local.main_port
+          allowInsecure = local.http_ingress ? false : null
+          additionalPortMappings = local.http_ingress ? null : [
             for p in local.additional_ports : {
               external    = true
               targetPort  = p
@@ -123,7 +136,7 @@ resource "azapi_resource" "app" {
         containers = [{
           name  = "pathways"
           image = each.value.image
-          args  = var.app_start_args
+          args  = local.start_args
           resources = {
             cpu    = var.cpu
             memory = var.memory
@@ -175,16 +188,17 @@ resource "azapi_resource" "app" {
             },
           ]
         }]
-        # One engine per database: the engine lease refuses a second, or holds it as a standby.
+        # One engine per database: the engine lease refuses a second, or holds it as a standby. With
+        # standby_replica the second replica is that standby, started with --standby.
         scale = {
-          minReplicas = 1
-          maxReplicas = 1
+          minReplicas = local.replicas
+          maxReplicas = local.replicas
         }
       }
     }
   }
 
-  response_export_values = ["properties.latestRevisionName"]
+  response_export_values = ["properties.latestRevisionName", "properties.configuration.ingress.fqdn"]
 }
 
 # pathways migrate, run by hand or from a pipeline before a slot's new revision takes traffic:

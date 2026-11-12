@@ -33,7 +33,7 @@ This page is generated from the code in the repository root by `scripts/docs.sh`
 
 ## Inputs
 
-23 inputs, 6 of them required. The required ones come first, then the rest by name.
+26 inputs, 4 of them required. The required ones come first, then the rest by name.
 
 ### `location`
 
@@ -46,27 +46,6 @@ Type:
 ```hcl
 string
 ```
-
-### `mllp_ports`
-
-Required.
-
-The TCP ports the engine's MLLP sources listen on, each exposed on the same port number. The first is the app's main ingress port, the rest are additional port mappings: six at most (one plus five), never 80 or 443, never the reserved port 36985, never the probe port. Every exposed port, main or additional, is unique across the environment, and each slot has an environment of its own.
-
-Type:
-
-```hcl
-list(number)
-```
-
-The plan refuses a value that breaks one of these rules, with its message:
-
-- mllp\_ports must hold 1 to 6 ports: Container Apps exposes one main port and at most five additional TCP ports.
-- Each MLLP port must be a whole number from 1 to 65535.
-- mllp\_ports must not repeat a port: an exposed TCP port, main or additional, is unique across the environment.
-- Port 36985 is reserved by Container Apps and cannot be exposed.
-- Ports 80 and 443 belong to the environment's HTTP ingress and cannot be exposed as TCP ports.
-- mllp\_ports must not include probes\_port: the probe listener is never exposed.
 
 ### `name`
 
@@ -83,39 +62,6 @@ string
 The plan refuses a value that breaks this rule, with this message:
 
 - name must be 3 to 16 lowercase letters, digits and single hyphens, starting with a letter and not ending with a hyphen.
-
-### `postgres`
-
-Required.
-
-The PostgreSQL flexible server. It has private access only: delegated\_subnet\_id is a subnet delegated to Microsoft.DBforPostgreSQL/flexibleServers, and private\_dns\_zone\_id a private DNS zone ending in .postgres.database.azure.com linked to the virtual network. Password and Microsoft Entra authentication are both on; entra\_administrator, when set, makes that principal an Entra administrator of the server.
-
-Type:
-
-```hcl
-object({
-  delegated_subnet_id            = string
-  private_dns_zone_id            = string
-  version                        = optional(string, "16")
-  sku_name                       = optional(string, "GP_Standard_D2ds_v5")
-  storage_mb                     = optional(number, 32768)
-  backup_retention_days          = optional(number, 35)
-  geo_redundant_backup_enabled   = optional(bool, false)
-  zone                           = optional(string)
-  high_availability_standby_zone = optional(string)
-  entra_administrator = optional(object({
-    object_id      = string
-    principal_name = string
-    principal_type = string
-  }))
-})
-```
-
-The plan refuses a value that breaks one of these rules, with its message:
-
-- postgres.backup\_retention\_days must be from 7 to 35.
-- postgres.private\_dns\_zone\_id must be a private DNS zone whose name ends in .postgres.database.azure.com.
-- postgres.entra\_administrator.principal\_type must be User, Group or ServicePrincipal.
 
 ### `resource_group_name`
 
@@ -250,6 +196,47 @@ The plan refuses a value that breaks one of these rules, with its message:
 - Each environment variable name must be letters, digits and underscores, not starting with a digit.
 - PATHWAYS\_DATABASE\_URL is set by the module from Key Vault; do not pass it as a plain variable.
 
+### `existing_postgres`
+
+Optional.
+
+A PostgreSQL server you already run, in place of the one the module makes. database\_url\_secret\_name names a secret you put in this module's Key Vault yourself, holding the engine's database URL (the server must take TLS, and the app must reach it from its environment's subnet). The module makes no server, writes no database-url secret and never sees the URL, so it stays out of the Terraform state. Set postgres or existing\_postgres, one of the two.
+
+Type:
+
+```hcl
+object({
+  database_url_secret_name = string
+})
+```
+
+Default: `null`
+
+The plan refuses a value that breaks one of these rules, with its message:
+
+- Set postgres, for a server the module makes, or existing\_postgres, for one you already run: one of the two.
+- existing\_postgres.database\_url\_secret\_name must be a Key Vault secret name: 1 to 127 letters, digits and hyphens.
+- existing\_postgres.database\_url\_secret\_name must not be the name of a master key's secret in encryption\_key\_secrets.
+
+### `http_port`
+
+Optional.
+
+The port the engine's HTTP source listens on, for an app whose only intake is HTTP. The app then gets HTTP ingress in place of TCP: Container Apps ends TLS on port 443 of the app's address and passes plain HTTP to this port inside the environment, and plain HTTP from outside is refused (allowInsecure is false). ingress\_allowed\_cidrs guards it as it guards MLLP. Null, the default, for MLLP over TCP ingress (mllp\_ports).
+
+Type:
+
+```hcl
+number
+```
+
+Default: `null`
+
+The plan refuses a value that breaks one of these rules, with its message:
+
+- http\_port must be a whole number from 1 to 65535, and not the reserved port 36985.
+- http\_port must not be probes\_port: the probe listener is never exposed.
+
 ### `ingress_allowed_cidrs`
 
 Optional.
@@ -379,6 +366,65 @@ The plan refuses a value that breaks this rule, with this message:
 
 - migrate\_timeout\_seconds must be a whole number of at least 60.
 
+### `mllp_ports`
+
+Optional.
+
+The TCP ports the engine's MLLP sources listen on, each exposed on the same port number. The first is the app's main ingress port, the rest are additional port mappings: six at most (one plus five), never 80 or 443, never the reserved port 36985, never the probe port. Every exposed port, main or additional, is unique across the environment, and each slot has an environment of its own. Empty only with http\_port set: the app takes either MLLP over TCP ingress or HTTP, not both.
+
+Type:
+
+```hcl
+list(number)
+```
+
+Default: `[]`
+
+The plan refuses a value that breaks one of these rules, with its message:
+
+- mllp\_ports must hold at most 6 ports: Container Apps exposes one main port and at most five additional TCP ports.
+- Set mllp\_ports or http\_port, one of the two: the app's ingress is either TCP for MLLP or HTTP, not both and not neither.
+- Each MLLP port must be a whole number from 1 to 65535.
+- mllp\_ports must not repeat a port: an exposed TCP port, main or additional, is unique across the environment.
+- Port 36985 is reserved by Container Apps and cannot be exposed.
+- Ports 80 and 443 belong to the environment's HTTP ingress and cannot be exposed as TCP ports.
+- mllp\_ports must not include probes\_port: the probe listener is never exposed.
+
+### `postgres`
+
+Optional.
+
+The PostgreSQL flexible server. It has private access only: delegated\_subnet\_id is a subnet delegated to Microsoft.DBforPostgreSQL/flexibleServers, and private\_dns\_zone\_id a private DNS zone ending in .postgres.database.azure.com linked to the virtual network. Password and Microsoft Entra authentication are both on; entra\_administrator, when set, makes that principal an Entra administrator of the server. Null with existing\_postgres, for a server you already run.
+
+Type:
+
+```hcl
+object({
+  delegated_subnet_id            = string
+  private_dns_zone_id            = string
+  version                        = optional(string, "16")
+  sku_name                       = optional(string, "GP_Standard_D2ds_v5")
+  storage_mb                     = optional(number, 32768)
+  backup_retention_days          = optional(number, 35)
+  geo_redundant_backup_enabled   = optional(bool, false)
+  zone                           = optional(string)
+  high_availability_standby_zone = optional(string)
+  entra_administrator = optional(object({
+    object_id      = string
+    principal_name = string
+    principal_type = string
+  }))
+})
+```
+
+Default: `null`
+
+The plan refuses a value that breaks one of these rules, with its message:
+
+- postgres.backup\_retention\_days must be from 7 to 35.
+- postgres.private\_dns\_zone\_id must be a private DNS zone whose name ends in .postgres.database.azure.com.
+- postgres.entra\_administrator.principal\_type must be User, Group or ServicePrincipal.
+
 ### `probes_port`
 
 Optional.
@@ -396,6 +442,20 @@ Default: `9091`
 The plan refuses a value that breaks this rule, with this message:
 
 - probes\_port must be a whole number from 1 to 65535, and not the reserved port 36985.
+
+### `standby_replica`
+
+Optional.
+
+Run a second replica of the app as the engine's warm standby. Both replicas start with --standby: the first to ask takes the engine lease and runs every channel, the other holds no lease, opens no listener and answers /readyz 503 standby, so the ingress sends it nothing, and takes over within about 20 seconds once the engine holding the lease stops. Only one engine works at a time: the lease, not the replica count, decides. Off by default: one replica.
+
+Type:
+
+```hcl
+bool
+```
+
+Default: `false`
 
 ### `storage`
 
@@ -478,7 +538,15 @@ Default: `false`
 
 ## Outputs
 
-7 outputs, by name.
+10 outputs, by name.
+
+### `database_url_secret_name`
+
+The Key Vault secret the app and the migrate job read the database URL from: database-url, which the module writes, or existing\_postgres.database\_url\_secret\_name.
+
+### `http_port`
+
+The port the engine's HTTP source listens on behind HTTP ingress, or null for MLLP over TCP ingress.
 
 ### `identity`
 
@@ -498,11 +566,15 @@ The MLLP ports each slot exposes.
 
 ### `postgres`
 
-The PostgreSQL server's id, host name, database and administrator login. The password is only in the database-url secret.
+The PostgreSQL server's id, host name, database and administrator login. The password is only in the database-url secret. Null with existing\_postgres: the module made no server.
 
 ### `slots`
 
-Per slot: the environment's id and static IP address (where senders connect for MLLP), the app's id and name, and the migrate job's name.
+Per slot: the environment's id, static IP address (where senders connect for MLLP) and default domain, the app's id, name and address (fqdn, where senders connect for HTTP over TLS), and the migrate job's name.
+
+### `standby_replica`
+
+Whether the app runs a second replica as the engine's warm standby.
 
 ### `storage`
 

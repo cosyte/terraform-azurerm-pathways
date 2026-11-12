@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 #
-# Runs the plan-only tests against mocked providers: the root module's (tests/*.tftest.hcl) and each
+# Runs the plan-only tests against mocked providers: the root module's (tests/*.tftest.hcl), each
 # module's under modules/ (modules/<name>/tests/*.tftest.hcl), each module as the root of its own
-# run, the way a caller who uses it on its own would.
+# run, the way a caller who uses it on its own would, and each example's under examples/
+# (examples/<name>/tests/*.tftest.hcl), the example as a caller would apply it.
 #
 #   tests/run.sh
 #
 # What this script enforces before Terraform runs, because a test that can reach a real account is
 # worse than none:
-#   * every module under modules/ has tests;
+#   * every module under modules/ and every example under examples/ has tests;
+#   * an example folder with no .tf file (a shape not supported yet) holds a README.md and nothing
+#     else, so no Terraform for a shape the engine cannot run safely slips in beside it;
 #   * every run block says `command = plan` (terraform test defaults to apply);
 #   * every test file mocks each of azurerm and azapi that its module requires;
 #   * no Azure credential reaches Terraform: the ARM_ and AZURE_ credential variables are unset,
@@ -33,6 +36,19 @@ dirs=(.)
 while IFS= read -r d; do
   dirs+=("$d")
 done < <(find modules -mindepth 1 -maxdepth 1 -type d | sort)
+
+while IFS= read -r d; do
+  shopt -s nullglob
+  tf=("${d}"/*.tf)
+  shopt -u nullglob
+  if [ "${#tf[@]}" -gt 0 ]; then
+    dirs+=("$d")
+  else
+    others=$(find "$d" -mindepth 1 ! -name README.md -print | head -n 1)
+    [ -f "${d}/README.md" ] && [ -z "$others" ] \
+      || fail "${d} has no .tf file, so it must hold a README.md and nothing else"
+  fi
+done < <(find examples -mindepth 1 -maxdepth 1 -type d | sort)
 
 # The providers that reach Azure, by local name; a module that requires one must mock it.
 cloud_providers=(azurerm azapi)

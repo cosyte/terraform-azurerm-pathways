@@ -32,5 +32,9 @@ module "key_vault" {
 `database_url_secret_id` is ready only once the reader holds its role, so pass it to whatever reads
 the secret.
 
+For a PostgreSQL server you already run, pass `existing_database_url_secret_name` in place of
+`database_url`: the name of a secret you put in the vault yourself, holding the URL. The module then
+writes no secret and never sees the URL, and `database_url_secret_id` names your secret.
+
 Inputs are in [variables.tf](variables.tf) and outputs in [outputs.tf](outputs.tf). Its tests are
 in [tests/](tests), run by `tests/run.sh` at the repo root.

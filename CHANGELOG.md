@@ -2,6 +2,32 @@
 
 ## Unreleased (patch)
 
+- Examples, one folder per deployment shape, each with a README that says what it builds, when to
+  choose it, what it costs and what it does not cover, a page on docs.cosyte.com, and a test that
+  plans it against mocked providers in CI: `basic` (minimal), `production` (one engine with a warm
+  standby and a zone-redundant database), `existing-network`, `existing-postgres`, `mllp-only`,
+  `http-only`, `complete` (storage and SFTP), `internal-only` and `geo-redundant-backup` (with the
+  restore steps). `multi-node`, `blue-green` and `disaster-recovery` hold a README alone: the engine
+  does not support those shapes yet, and `tests/run.sh` refuses Terraform in a folder like them. The
+  README has an index of every example.
+- New inputs for those shapes. Nothing a caller must change: each is off or null by default, and
+  every configuration that planned before plans the same way.
+  - `standby_replica`: a second replica as the engine's warm standby. Both replicas start with
+    `--standby`; the first takes the engine lease, and the other takes over once it stops.
+  - `http_port`: HTTP ingress in place of TCP, for an engine whose only intake is HTTP. Container
+    Apps ends TLS on port 443 and refuses plain HTTP from outside. `mllp_ports` now defaults to an
+    empty list, and the plan refuses both or neither.
+  - `existing_postgres`: a PostgreSQL server you already run, its database URL in a Key Vault
+    secret you put there yourself. The module makes no server and never sees the URL. `postgres`
+    now defaults to null, and the plan refuses both or neither. In the `key_vault` module, the new
+    `existing_database_url_secret_name` does the same, and `database_url` defaults to null.
+  - New outputs: `database_url_secret_name`, `http_port`, `standby_replica`, and each slot's
+    `default_domain` and `fqdn`. `postgres` is null with `existing_postgres`.
+- Fixed: a configuration that creates the Key Vault's private endpoint subnet in the same apply,
+  as `examples/complete` does, could not plan: the `key_vault` module counted its private endpoint
+  from the subnet's id, which is not known until apply. It now counts from
+  `public_network_access_enabled`, which is known; the plan already refuses a closed vault without
+  a subnet. The new example tests found it.
 - The module: Pathways on Azure Container Apps, with a Container Apps environment, app and migrate
   job per slot, TCP ingress for MLLP behind an address guard, PostgreSQL on a private flexible
   server with TLS required, the database URL and the master keys in Key Vault, a managed identity

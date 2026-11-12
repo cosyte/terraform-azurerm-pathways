@@ -35,5 +35,11 @@ module "container_apps" {
 Grant the identity its role on the vault before you apply this module: a revision that cannot read
 its secrets does not start.
 
+Two inputs change the shape. `http_port`, in place of `mllp_ports`, gives the app HTTP ingress:
+Container Apps ends TLS on port 443 and passes plain HTTP to that port, and refuses plain HTTP from
+outside. `standby_replica = true` runs a second replica as the engine's warm standby: both start
+with `--standby`, the first to ask takes the engine lease, and the other answers `/readyz` 503 and
+takes over once the first stops.
+
 Inputs are in [variables.tf](variables.tf) and outputs in [outputs.tf](outputs.tf). Its tests are
 in [tests/](tests), run by `tests/run.sh` at the repo root.
