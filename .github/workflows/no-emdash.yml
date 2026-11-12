@@ -1,0 +1,45 @@
+# We never use the em dash or the en dash. This gate scans the tracked files, the PR title and body,
+# and the commit messages on the branch, since a squash merge builds its commit from the title and
+# body. scripts/check-no-emdash.sh says what it matches.
+name: Em-dash gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  no-emdash:
+    name: no-emdash
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Tracked files
+        run: scripts/check-no-emdash.sh
+
+      - name: PR title and body
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s\n%s\n' "$PR_TITLE" "$PR_BODY" \
+            | scripts/check-no-emdash.sh --stdin 'the PR title and body'
+
+      - name: Commit messages on this branch
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git log --format=%B "${BASE_SHA}..${HEAD_SHA}" \
+            | scripts/check-no-emdash.sh --stdin 'the commit messages on this branch'

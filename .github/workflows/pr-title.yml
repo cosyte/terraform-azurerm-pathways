@@ -1,0 +1,17 @@
+# A pull request title is a Conventional Commit with a scope, checked by the shared workflow every
+# Cosyte repository uses.
+name: PR title
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-title:
+    permissions:
+      contents: read
+    uses: cosyte/.github/.github/workflows/pr-title.yml@402d4e1568e7078f69af42908ab1559ec44e1682 # workflows-2026-11-09-402d4e1568e7
