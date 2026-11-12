@@ -2,7 +2,7 @@
 id: example-production
 title: The production example
 sidebar_label: production
-description: "One slot for production traffic: one engine working and a second replica waiting as its warm standby, a zone-redundant PostgreSQL server, a year of logs and every schema change run from the migrate job."
+description: "One slot for production: one engine working, a second replica as its warm standby, and a zone-redundant PostgreSQL server."
 ---
 
 # The production example
