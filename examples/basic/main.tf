@@ -33,7 +33,7 @@ module "pathways" {
   # One MLLP source on 2575; pathways.yaml's probes block listens on 0.0.0.0:9091.
   mllp_ports            = [2575]
   ingress_allowed_cidrs = ["10.20.0.0/16"]
-  drain_seconds         = 60
+  drain_seconds         = 30 # Above 30 is unconfirmed: see "Limits we rely on" in the README.
 
   encryption_key_secrets = {
     PATHWAYS_KEY_2026_11 = "pathways-key-2026-11"

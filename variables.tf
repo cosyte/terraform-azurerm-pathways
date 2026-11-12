@@ -94,23 +94,49 @@ variable "mllp_ports" {
 }
 
 variable "ingress_allowed_cidrs" {
-  description = "The address ranges allowed to reach the MLLP ports; every other address is denied. Empty allows every address that can route to the environment, which is private to its virtual network, and is refused when internal_load_balancer_enabled is false. A range covering every address (a /0, such as 0.0.0.0/0 or ::/0) is refused unless unsafe_allow_mllp_from_any_address is true."
+  description = "The address ranges allowed to reach the MLLP ports; every other address is denied. Each entry is a plain CIDR range: no spaces, a prefix length with no leading zero. Empty allows every address that can route to the environment, which is private to its virtual network, and is refused when internal_load_balancer_enabled is false. Unless unsafe_allow_mllp_from_any_address is true, it refuses an IPv4 range shorter than /8, an IPv6 range shorter than /32, an IPv4-mapped IPv6 range (::ffff:0:0/96) wider than an IPv4 /8 or holding the whole mapped range, and a list whose IPv4 ranges add up to every IPv4 address. Every other range is trusted as written."
   type        = list(string)
   default     = []
 
   validation {
-    condition     = alltrue([for c in var.ingress_allowed_cidrs : can(cidrhost(c, 0))])
-    error_message = "Each entry of ingress_allowed_cidrs must be a CIDR range, such as 10.20.0.0/16."
+    condition     = alltrue([for c in var.ingress_allowed_cidrs : can(cidrhost(c, 0)) && can(regex("^[0-9A-Fa-f:.]+/(0|[1-9][0-9]{0,2})$", c))])
+    error_message = "Each entry of ingress_allowed_cidrs must be a plain CIDR range, such as 10.20.0.0/16 or 2001:db8::/48: no spaces, and a prefix length with no leading zero."
   }
 
+  # The prefix length is compared as a number, after the entry has parsed as a CIDR range. An entry
+  # that does not parse counts as wide (try falls back to false), so this check fails closed.
   validation {
-    condition     = var.unsafe_allow_mllp_from_any_address || alltrue([for c in var.ingress_allowed_cidrs : !endswith(trimspace(c), "/0")])
-    error_message = "ingress_allowed_cidrs must not hold a range that covers every address (0.0.0.0/0, ::/0 or any /0): MLLP has no authentication and carries PHI. Name your senders' ranges, or set unsafe_allow_mllp_from_any_address = true if you mean it."
+    condition = var.unsafe_allow_mllp_from_any_address || alltrue([
+      for c in var.ingress_allowed_cidrs : try(
+        strcontains(c, ":")
+        ? (
+          tonumber(split("/", c)[1]) >= 32
+          && !(tonumber(split("/", c)[1]) <= 96 && cidrhost(c, 0) == cidrhost("::ffff:0:0/${split("/", c)[1]}", 0))
+          && !(tonumber(split("/", c)[1]) < 104 && strcontains(cidrhost(c, 0), "."))
+        )
+        : tonumber(split("/", c)[1]) >= 8,
+        false
+      )
+    ])
+    error_message = "ingress_allowed_cidrs must not hold a range wider than an IPv4 /8 or an IPv6 /32, nor an IPv4-mapped IPv6 range wider than an IPv4 /8 (0.0.0.0/0, ::/0, 0.0.0.0/1 and ::ffff:0:0/96 are all refused): MLLP has no authentication and carries PHI. Name your senders' ranges, or set unsafe_allow_mllp_from_any_address = true if you mean it."
+  }
+
+  # Ranges that are each narrow enough can still add up to every IPv4 address, such as 256 /8s. The
+  # sizes are added without removing overlaps, so the sum can only overstate the coverage.
+  validation {
+    condition = var.unsafe_allow_mllp_from_any_address || try(sum(concat([0], [
+      for c in distinct(var.ingress_allowed_cidrs) : (
+        strcontains(c, ":")
+        ? (strcontains(cidrhost(c, 0), ".") && tonumber(split("/", c)[1]) >= 96 ? pow(2, 128 - tonumber(split("/", c)[1])) : 0)
+        : pow(2, 32 - tonumber(split("/", c)[1]))
+      )
+    ])) < pow(2, 32), false)
+    error_message = "The ranges in ingress_allowed_cidrs add up to every IPv4 address: MLLP has no authentication and carries PHI. Name your senders' ranges, or set unsafe_allow_mllp_from_any_address = true if you mean it."
   }
 }
 
 variable "unsafe_allow_mllp_from_any_address" {
-  description = "Allow a range that covers every address (0.0.0.0/0, ::/0) in ingress_allowed_cidrs. MLLP has no authentication of its own and carries PHI: with a public environment this opens the engine's intake to the whole internet. Leave it false."
+  description = "Allow ranges in ingress_allowed_cidrs that cover every address or most of it: a /0 (0.0.0.0/0, ::/0), an IPv4 range shorter than /8, an IPv6 range shorter than /32, a wide IPv4-mapped IPv6 range, or a list adding up to every IPv4 address. MLLP has no authentication of its own and carries PHI: with a public environment this opens the engine's intake to the whole internet. Leave it false."
   type        = bool
   default     = false
 }

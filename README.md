@@ -44,7 +44,7 @@ module "pathways" {
   }
 
   mllp_ports    = [2575]
-  drain_seconds = 60
+  drain_seconds = 30 # Above 30 is unconfirmed: see "Limits we rely on".
 
   encryption_key_secrets = {
     PATHWAYS_KEY_2026_11 = "pathways-key-2026-11"
@@ -125,6 +125,11 @@ additional, unique across an environment; port 36985 reserved for the platform's
 ports 80 and 443 never exposed as TCP ports. They have not yet been confirmed against a live
 environment.
 
+The app's address restrictions (`ingress_allowed_cidrs`) are set once, on its ingress, and we expect
+them to cover the additional TCP ports as well as the main one. The documentation does not say so
+for additional port mappings, so a live test should confirm that a denied address cannot reach an
+additional port either.
+
 The termination grace period is not one of them. The documentation gives no maximum for it, only a
 default of 30 seconds, and its application lifecycle page still says a container is killed 30
 seconds after SIGTERM. `drain_seconds` defaults to 30 and stops at 600, a bound of our own. Until a
@@ -143,9 +148,14 @@ Agreements.
 
 - MLLP has no authentication of its own. With `internal_load_balancer_enabled = false` the
   environment has a public address, so the plan refuses it unless `ingress_allowed_cidrs` names the
-  senders' ranges, and every other address is denied. A range covering every address (`0.0.0.0/0`,
-  `::/0`) is refused unless you set `unsafe_allow_mllp_from_any_address = true`, which opens the
-  engine's intake to anyone who can reach it: leave it off.
+  senders' ranges, and every other address is denied. Each range must be a plain CIDR range, with
+  no spaces and no leading zero in its prefix length. Unless you set
+  `unsafe_allow_mllp_from_any_address = true`, the plan refuses any range wider than an IPv4 `/8`
+  or an IPv6 `/32`, which includes `0.0.0.0/0` and `::/0`; an IPv4-mapped IPv6 range
+  (`::ffff:0:0/96`, or any range holding it) wider than an IPv4 `/8`; and a list whose IPv4 ranges
+  add up to every IPv4 address, such as 256 ranges of `/8`. The opt-in opens the engine's intake to
+  anyone who can reach it: leave it off. Every range the plan accepts is trusted as written, so name
+  your senders' ranges as narrowly as you can.
 - The Log Analytics workspace keeps Azure's default public endpoints for ingestion and query. Reading
   its logs still needs a Microsoft Entra identity with a role on the workspace; to close those
   endpoints, put the workspace behind an Azure Monitor Private Link Scope, which this module does not
