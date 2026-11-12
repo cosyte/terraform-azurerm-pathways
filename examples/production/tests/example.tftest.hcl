@@ -28,6 +28,8 @@ variables {
   endpoints_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-network-example/providers/Microsoft.Network/virtualNetworks/vnet-example/subnets/snet-endpoints"
   key_vault_private_dns_zone_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-network-example/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
   sender_cidrs                  = ["10.20.0.0/16"]
+  alarms_action_group_id        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-pathways-prod/providers/Microsoft.Insights/actionGroups/ag-pathways-example"
+  metrics_collector_image       = "registry.example.com/otel/collector:0.0.0@sha256:1111111111111111111111111111111111111111111111111111111111111111"
   database_administrators = {
     object_id      = "00000000-0000-0000-0000-000000000004"
     principal_name = "pathways-db-admins"
@@ -45,5 +47,10 @@ run "plans_one_engine_with_a_warm_standby_and_a_zone_redundant_database" {
   assert {
     condition     = output.postgres.administrator_login == "pathways_admin"
     error_message = "The production example must make its PostgreSQL server."
+  }
+
+  assert {
+    condition     = sort(keys(output.alarms.alarm_ids)) == tolist(["oldest_pending_age", "queue_depth", "refused_messages", "settled_failed", "store_down"])
+    error_message = "The production example must turn the alarms on: five metric alerts."
   }
 }
