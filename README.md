@@ -26,6 +26,31 @@ been applied to a real Azure subscription by us. Nothing here is published to a 
 
 It does not create the virtual network, its subnets or the private DNS zones: you pass their ids.
 
+## Layout
+
+The root module is the composition: it calls one module per concern and wires them together. Each
+module under `modules/` can also be used on its own; its README says what it needs.
+
+```text
+.
+├── main.tf              the composition: calls the modules below
+├── variables.tf         the root module's inputs
+├── outputs.tf           the root module's outputs
+├── versions.tf          Terraform and provider versions
+├── modules/
+│   ├── container_apps/  per slot: the environment, the Pathways app and the migrate job
+│   ├── database/        the PostgreSQL flexible server and the database URL
+│   ├── identity/        the managed identity the app and the jobs run as
+│   ├── key_vault/       the Key Vault, its secret, its roles and its audit log
+│   └── logs/            the Log Analytics workspace
+├── examples/
+│   └── basic/           the root module called with one slot
+├── tests/               the root module's tests, and run.sh, which runs every module's
+└── scripts/             validate.sh and policy.sh, run by the gate and CI
+```
+
+Each module has the same four files as the root, a README and a `tests/` folder of its own.
+
 ## Use it
 
 ```hcl

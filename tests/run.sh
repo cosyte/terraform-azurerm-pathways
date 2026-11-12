@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 #
-# Runs the module's plan-only tests (tests/*.tftest.hcl) against mocked providers.
+# Runs the plan-only tests against mocked providers: the root module's (tests/*.tftest.hcl) and each
+# module's under modules/ (modules/<name>/tests/*.tftest.hcl), each module as the root of its own
+# run, the way a caller who uses it on its own would.
 #
 #   tests/run.sh
 #
 # What this script enforces before Terraform runs, because a test that can reach a real account is
 # worse than none:
+#   * every module under modules/ has tests;
 #   * every run block says `command = plan` (terraform test defaults to apply);
-#   * every test file mocks the azurerm and azapi providers;
+#   * every test file mocks each of azurerm and azapi that its module requires;
 #   * no Azure credential reaches Terraform: the ARM_ and AZURE_ credential variables are unset,
 #     and the Azure CLI's configuration points at an empty folder, so a provider that tried to reach
 #     Azure would find nothing to sign in with.
 #
-# It leaves nothing behind: .terraform/ and the lock file `terraform init` writes are removed on
+# It leaves nothing behind: each .terraform/ and lock file `terraform init` writes is removed on
 # every exit path, so no lock file is committed.
 
 set -euo pipefail
@@ -26,20 +29,42 @@ fail() {
   exit 1
 }
 
-shopt -s nullglob
-files=(tests/*.tftest.hcl)
-shopt -u nullglob
-[ "${#files[@]}" -gt 0 ] || fail "no .tftest.hcl file found in tests/"
+dirs=(.)
+while IFS= read -r d; do
+  dirs+=("$d")
+done < <(find modules -mindepth 1 -maxdepth 1 -type d | sort)
 
-for f in "${files[@]}"; do
-  runs=$(grep -cE '^run "' "$f" || true)
-  plans=$(grep -cE '^[[:space:]]+command[[:space:]]*=[[:space:]]*plan[[:space:]]*$' "$f" || true)
-  commands=$(grep -cE '^[[:space:]]*command[[:space:]]*=' "$f" || true)
-  [ "$runs" -gt 0 ] || fail "${f} has no run block"
-  [ "$plans" -eq "$runs" ] && [ "$commands" -eq "$runs" ] \
-    || fail "${f}: ${runs} run block(s) but ${plans} 'command = plan' line(s) of ${commands} command line(s); every run block must plan, never apply"
-  grep -qE '^mock_provider "azurerm"' "$f" || fail "${f} does not mock the azurerm provider"
-  grep -qE '^mock_provider "azapi"' "$f" || fail "${f} does not mock the azapi provider"
+# The providers that reach Azure, by local name; a module that requires one must mock it.
+cloud_providers=(azurerm azapi)
+
+for d in "${dirs[@]}"; do
+  shopt -s nullglob
+  files=("${d}"/tests/*.tftest.hcl)
+  shopt -u nullglob
+  [ "${#files[@]}" -gt 0 ] || fail "no .tftest.hcl file found in ${d}/tests/"
+
+  required=()
+  for p in "${cloud_providers[@]}"; do
+    if grep -qE "^[[:space:]]+${p}[[:space:]]*=[[:space:]]*\{" "${d}/versions.tf"; then
+      required+=("$p")
+    fi
+  done
+
+  for f in "${files[@]}"; do
+    runs=$(grep -cE '^run "' "$f" || true)
+    plans=$(grep -cE '^[[:space:]]+command[[:space:]]*=[[:space:]]*plan[[:space:]]*$' "$f" || true)
+    commands=$(grep -cE '^[[:space:]]*command[[:space:]]*=' "$f" || true)
+    [ "$runs" -gt 0 ] || fail "${f} has no run block"
+    [ "$plans" -eq "$runs" ] && [ "$commands" -eq "$runs" ] \
+      || fail "${f}: ${runs} run block(s) but ${plans} 'command = plan' line(s) of ${commands} command line(s); every run block must plan, never apply"
+    # A run block that points at another module would escape the mocks checked against this one.
+    if grep -qE '^[[:space:]]+module[[:space:]]*\{' "$f"; then
+      fail "${f} has a run block with a module block; test each module from its own tests/ folder"
+    fi
+    for p in "${required[@]}"; do
+      grep -qE "^mock_provider \"${p}\"" "$f" || fail "${f} does not mock the ${p} provider"
+    done
+  done
 done
 
 while IFS= read -r v; do
@@ -52,9 +77,27 @@ export TF_IN_AUTOMATION=1
 export TF_INPUT=0
 
 cleanup() {
-  rm -rf "${root}/.terraform" "${root}/.terraform.lock.hcl" "$empty_az"
+  for d in "${dirs[@]}"; do
+    rm -rf "${root}/${d}/.terraform" "${root}/${d}/.terraform.lock.hcl"
+  done
+  rm -rf "$empty_az"
 }
 trap cleanup EXIT INT TERM
 
-terraform init -backend=false -input=false -no-color
-terraform test -no-color
+failed=()
+for d in "${dirs[@]}"; do
+  echo "::group::terraform test in ${d}"
+  if ! terraform -chdir="$d" init -backend=false -input=false -no-color; then
+    failed+=("${d} (init)")
+  elif ! terraform -chdir="$d" test -no-color; then
+    failed+=("${d} (test)")
+  fi
+  echo "::endgroup::"
+done
+
+if [ "${#failed[@]}" -gt 0 ]; then
+  echo "tests/run.sh: failed in ${#failed[@]} of ${#dirs[@]} folders:" >&2
+  printf '  %s\n' "${failed[@]}" >&2
+  exit 1
+fi
+echo "Tested ${#dirs[@]} folders."

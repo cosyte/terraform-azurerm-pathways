@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
-# terraform init -backend=false and terraform validate in the module root and in each folder under
-# examples/. Needs no credentials: validate reads the configuration and the provider schemas only.
-# Removes each .terraform/ and lock file it makes, so no lock file is committed.
+# terraform init -backend=false and terraform validate in the module root, in each module under
+# modules/ (on its own, as a caller who uses it alone would) and in each folder under examples/.
+# Needs no credentials: validate reads the configuration and the provider schemas only. Removes each
+# .terraform/ and lock file it makes, so no lock file is committed.
 #
 #   scripts/validate.sh
 
@@ -15,15 +16,26 @@ cd "$root"
 export TF_IN_AUTOMATION=1
 export TF_INPUT=0
 
-dirs=(.)
+modules=()
 while IFS= read -r d; do
-  dirs+=("$d")
+  modules+=("$d")
+done < <(find modules -mindepth 1 -maxdepth 1 -type d | sort)
+
+examples=()
+while IFS= read -r d; do
+  examples+=("$d")
 done < <(find examples -mindepth 1 -maxdepth 1 -type d | sort)
 
-if [ "${#dirs[@]}" -lt 2 ]; then
+if [ "${#modules[@]}" -eq 0 ]; then
+  echo "scripts/validate.sh: no module under modules/" >&2
+  exit 1
+fi
+if [ "${#examples[@]}" -eq 0 ]; then
   echo "scripts/validate.sh: no example under examples/" >&2
   exit 1
 fi
+
+dirs=(. "${modules[@]}" "${examples[@]}")
 
 cleanup() {
   for d in "${dirs[@]}"; do
