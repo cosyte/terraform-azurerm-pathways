@@ -1,0 +1,18 @@
+# One channel: the hospital sends lab orders over MLLP, and each is written as a file to the lab's
+# SFTP container, where the lab fetches it. The account and container names come from the
+# environment the module sets; the engine signs in with its managed identity, so no key is here.
+source:
+  mllp:
+    port: 2575
+    host: 0.0.0.0
+    # Your own server certificate and key, copied into the image. MLLP carries no credentials, so
+    # mutual TLS (tls.ca) is how the source checks who is sending.
+    tls:
+      cert: ../../certs/server.pem
+      key: ../../certs/server.key
+destinations:
+  - file:
+      dir: outbox
+      azblob:
+        account: { env: PATHWAYS_AZBLOB_ACCOUNT }
+        container: { env: PATHWAYS_SFTP_LAB_CONTAINER }

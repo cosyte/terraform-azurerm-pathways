@@ -40,3 +40,17 @@ output "mllp_ports" {
   description = "The MLLP ports each slot exposes."
   value       = var.mllp_ports
 }
+
+output "storage" {
+  description = "With storage on: the account's id and name, the engine's container, the SFTP host (port 22), each SFTP user's sign-in name and container, and the plain environment variables the app gets for its channels. Null with storage off."
+  value = one([
+    for s in module.storage : {
+      account_id      = s.account_id
+      account_name    = s.account_name
+      container       = s.container
+      sftp_host       = s.sftp_host
+      sftp_users      = s.sftp_users
+      app_environment = tomap(local.storage_app_environment)
+    }
+  ])
+}
