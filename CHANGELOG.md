@@ -20,3 +20,12 @@
   environment variables. `examples/complete` stands Pathways up end to end with the network, the
   database, storage, SFTP and one channel. The README says what SFTP on Blob Storage cannot do and
   what drives the cost.
+- Documentation for docs.cosyte.com, in `docs-content/`: a tutorial that deploys the basic example,
+  how-to guides for the network, storage, SFTP and upgrades, the deployment shapes and the limits we
+  rely on, troubleshooting, testing and performance, a page per example that shows its files and
+  says what it deploys and what it costs to leave running, and the reference of every input and
+  output of the root module and of each module, generated from the code by `scripts/docs.sh`. CI
+  fails when the reference or an example's files differ from the code, or when an example has no
+  page. A tag `v<version>` on main now makes a GitHub release with `docs-content.tar.gz` and
+  `source.tar.gz`, the archives the docs site reads. The README links to the documentation. No input
+  or output changes.

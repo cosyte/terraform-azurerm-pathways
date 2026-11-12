@@ -1,0 +1,49 @@
+{
+  "docs": [
+    "intro",
+    { "type": "category", "label": "Installation", "items": ["installation"] },
+    { "type": "category", "label": "Quickstart", "items": ["quickstart"] },
+    {
+      "type": "category",
+      "label": "How-to guides",
+      "items": [
+        "prepare-the-network",
+        "store-files-in-blob-storage",
+        "give-partners-sftp-access",
+        "upgrade-the-engine-and-the-module"
+      ]
+    },
+    {
+      "type": "category",
+      "label": "Explanation",
+      "items": ["deployment-shapes", "limits-we-rely-on"]
+    },
+    {
+      "type": "category",
+      "label": "Reference",
+      "items": [
+        "inputs-and-outputs",
+        {
+          "type": "category",
+          "label": "Modules",
+          "items": [
+            "module-container-apps",
+            "module-database",
+            "module-identity",
+            "module-key-vault",
+            "module-logs",
+            "module-storage"
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Examples",
+          "items": ["example-basic", "example-complete"]
+        }
+      ]
+    },
+    { "type": "category", "label": "Troubleshooting", "items": ["troubleshooting"] },
+    "testing-and-quality",
+    "performance"
+  ]
+}

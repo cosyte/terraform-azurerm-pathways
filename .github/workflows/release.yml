@@ -1,0 +1,123 @@
+# The release: a tag v<major>.<minor>.<patch> pushed on a commit of main becomes a GitHub release
+# carrying the two archives docs.cosyte.com reads, the way the libraries' shared release pipeline
+# attaches them, and a repository_dispatch asks cosyte/docs to rebuild.
+#
+#   docs-content.tar.gz   the contents of docs-content/ at the archive's root, with the "Current
+#                         numbers" sections of testing-and-quality.md and performance.md filled in
+#                         from this run
+#   source.tar.gz         the module's tracked source at the archive's root: the four root files,
+#                         modules/, examples/, README.md, LICENSE and CHANGELOG.md
+#
+# There is nothing to publish to npm and no version file: the tag is the version. Before tagging,
+# rename the "Unreleased" heading of CHANGELOG.md to the version and merge that; the release's notes
+# are that section, and the run refuses a tag whose version has none.
+#
+# The run refuses a tag that is not on main, then runs the checks the quality pages report
+# (scripts/validate.sh and tests/run.sh, timed), the docs check, and only then packs and releases.
+# The release is created at the existing tag with --verify-tag and no target, with both archives in
+# the same call, so it is never visible without them. A rerun on a tag that already has a release
+# uploads only an archive the release does not carry yet and never replaces one.
+#
+# No Azure credential is read here, and nothing is applied.
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # create the GitHub release and attach its archives
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: The tag names a commit on main, and CHANGELOG.md has its section
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::${TAG} names ${GITHUB_SHA}, which is not on main. Tag a commit of main."
+            exit 1
+          fi
+          python3 scripts/docs.py notes --version "$version" --out "${RUNNER_TEMP}/release-notes.md"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Read the pinned Terraform version
+        id: tf_version
+        run: echo "value=$(awk -F'"' '/^terraform[[:space:]]*=/ {print $(NF-1)}' mise.toml)" >> "$GITHUB_OUTPUT"
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ steps.tf_version.outputs.value }}
+          terraform_wrapper: false
+
+      - name: The docs match the code
+        run: scripts/docs.sh --check
+
+      - name: Validate and test, timed, for the quality pages
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: python3 scripts/docs.py measure --version "$VERSION" --out "${RUNNER_TEMP}/numbers.json"
+
+      - name: Build docs-content.tar.gz and source.tar.gz
+        run: |
+          set -euo pipefail
+          python3 scripts/docs.py pack --out dist-artifacts --numbers "${RUNNER_TEMP}/numbers.json"
+          sha256sum dist-artifacts/*.tar.gz
+
+      - name: Create the GitHub release with both archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          assets=(dist-artifacts/docs-content.tar.gz dist-artifacts/source.tar.gz)
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "${TAG} already has a release; attaching only the archives it does not carry yet."
+            carried=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+            missing=()
+            for file in "${assets[@]}"; do
+              if grep -qxF "$(basename "$file")" <<< "$carried"; then
+                echo "::notice::${TAG} already carries $(basename "$file"); it is left as it is."
+              else
+                missing+=("$file")
+              fi
+            done
+            if [ "${#missing[@]}" -gt 0 ]; then
+              gh release upload "$TAG" "${missing[@]}"
+            fi
+          else
+            gh release create "$TAG" "${assets[@]}" --verify-tag --title "$TAG" \
+              --notes-file "${RUNNER_TEMP}/release-notes.md"
+          fi
+
+      - name: Ask cosyte/docs to rebuild
+        env:
+          DISPATCH_TOKEN: ${{ secrets.DOCS_REPO_DISPATCH_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DISPATCH_TOKEN" ]; then
+            echo "::warning title=Docs rebuild not triggered::DOCS_REPO_DISPATCH_TOKEN is not set for this repository. The release is fine; the docs site picks it up at its next build."
+            exit 0
+          fi
+          if ! GH_TOKEN="$DISPATCH_TOKEN" gh api repos/cosyte/docs/dispatches -f event_type=package-released \
+            -f 'client_payload[package]=terraform-azurerm-pathways' -f "client_payload[version]=${VERSION}"; then
+            echo "::warning title=Docs rebuild dispatch failed::The release itself succeeded. Only the cosyte/docs rebuild dispatch failed; the site picks the release up at its next build."
+          fi
