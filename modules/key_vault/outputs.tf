@@ -14,13 +14,13 @@ output "uri" {
 }
 
 output "database_url_secret_name" {
-  description = "The name of the secret that holds the database URL."
-  value       = azurerm_key_vault_secret.database_url.name
+  description = "The name of the secret that holds the database URL: database-url, or existing_database_url_secret_name."
+  value       = local.database_url_secret
 }
 
 output "database_url_secret_id" {
-  description = "The versionless id of the database-url secret. It is ready only once the reader holds its role, so a container app that reads it can start."
-  value       = azurerm_key_vault_secret.database_url.versionless_id
+  description = "The versionless id of the secret that holds the database URL. It is ready only once the reader holds its role, so a container app that reads it can start."
+  value       = local.create_database_url_secret ? azurerm_key_vault_secret.database_url[0].versionless_id : "${azurerm_key_vault.this.vault_uri}secrets/${local.database_url_secret}"
 
   depends_on = [azurerm_role_assignment.identity_secrets_user]
 }

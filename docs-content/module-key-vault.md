@@ -32,19 +32,7 @@ This page is generated from the code in `modules/key_vault/` by `scripts/docs.sh
 
 ## Inputs
 
-12 inputs, 6 of them required. The required ones come first, then the rest by name.
-
-### `database_url`
-
-Required.
-
-The engine's database URL, written to the database-url secret.
-
-Type:
-
-```hcl
-string
-```
+13 inputs, 5 of them required. The required ones come first, then the rest by name.
 
 ### `location`
 
@@ -127,6 +115,39 @@ Default: `[]`
 The plan refuses a value that breaks this rule, with this message:
 
 - allowed\_ip\_ranges has no effect unless public\_network\_access\_enabled is true.
+
+### `database_url`
+
+Optional.
+
+The engine's database URL, written to the database-url secret. Null with existing\_database\_url\_secret\_name, when the URL is a secret you put in the vault yourself.
+
+Type:
+
+```hcl
+string
+```
+
+Default: `null`
+
+### `existing_database_url_secret_name`
+
+Optional.
+
+The name of a secret you put in this vault yourself, holding the database URL of a PostgreSQL server you already run. The module then writes no database-url secret and never sees the URL, so it stays out of the Terraform state. Null, the default, with database\_url: the module writes database-url from it.
+
+Type:
+
+```hcl
+string
+```
+
+Default: `null`
+
+The plan refuses a value that breaks one of these rules, with its message:
+
+- existing\_database\_url\_secret\_name must be a Key Vault secret name: 1 to 127 letters, digits and hyphens.
+- Set database\_url or existing\_database\_url\_secret\_name, one of the two: the module writes the database-url secret from the first, or reads the secret you put in the vault under the second.
 
 ### `private_dns_zone_id`
 
@@ -220,11 +241,11 @@ The Key Vault's resource id, ready only once its private endpoint (when there is
 
 ### `database_url_secret_id`
 
-The versionless id of the database-url secret. It is ready only once the reader holds its role, so a container app that reads it can start.
+The versionless id of the secret that holds the database URL. It is ready only once the reader holds its role, so a container app that reads it can start.
 
 ### `database_url_secret_name`
 
-The name of the secret that holds the database URL.
+The name of the secret that holds the database URL: database-url, or existing\_database\_url\_secret\_name.
 
 ### `id`
 

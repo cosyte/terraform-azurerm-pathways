@@ -59,12 +59,18 @@ variable "slots" {
 }
 
 variable "mllp_ports" {
-  description = "The TCP ports the engine's MLLP sources listen on, each exposed on the same port number. The first is the app's main ingress port, the rest are additional port mappings: six at most (one plus five), never 80 or 443, never the reserved port 36985, never the probe port. Every exposed port, main or additional, is unique across the environment, and each slot has an environment of its own."
+  description = "The TCP ports the engine's MLLP sources listen on, each exposed on the same port number. The first is the app's main ingress port, the rest are additional port mappings: six at most (one plus five), never 80 or 443, never the reserved port 36985, never the probe port. Every exposed port, main or additional, is unique across the environment, and each slot has an environment of its own. Empty only with http_port set: the app takes either MLLP over TCP ingress or HTTP, not both."
   type        = list(number)
+  default     = []
 
   validation {
-    condition     = length(var.mllp_ports) >= 1 && length(var.mllp_ports) <= 6
-    error_message = "mllp_ports must hold 1 to 6 ports: Container Apps exposes one main port and at most five additional TCP ports."
+    condition     = length(var.mllp_ports) <= 6
+    error_message = "mllp_ports must hold at most 6 ports: Container Apps exposes one main port and at most five additional TCP ports."
+  }
+
+  validation {
+    condition     = (length(var.mllp_ports) > 0) != (var.http_port != null)
+    error_message = "Set mllp_ports or http_port, one of the two: the app's ingress is either TCP for MLLP or HTTP, not both and not neither."
   }
 
   validation {
@@ -150,6 +156,28 @@ variable "internal_load_balancer_enabled" {
     condition     = var.internal_load_balancer_enabled || length(var.ingress_allowed_cidrs) > 0
     error_message = "internal_load_balancer_enabled = false gives the environment a public address, and MLLP has no authentication and carries PHI: name the senders' address ranges in ingress_allowed_cidrs."
   }
+}
+
+variable "http_port" {
+  description = "The port the engine's HTTP source listens on, for an app whose only intake is HTTP. The app then gets HTTP ingress in place of TCP: Container Apps ends TLS on port 443 of the app's address and passes plain HTTP to this port inside the environment, and plain HTTP from outside is refused (allowInsecure is false). ingress_allowed_cidrs guards it as it guards MLLP. Null, the default, for MLLP over TCP ingress (mllp_ports)."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.http_port == null || try(var.http_port >= 1 && var.http_port <= 65535 && floor(var.http_port) == var.http_port && var.http_port != 36985, false)
+    error_message = "http_port must be a whole number from 1 to 65535, and not the reserved port 36985."
+  }
+
+  validation {
+    condition     = var.http_port == null || try(var.http_port != var.probes_port, false)
+    error_message = "http_port must not be probes_port: the probe listener is never exposed."
+  }
+}
+
+variable "standby_replica" {
+  description = "Run a second replica of the app as the engine's warm standby. Both replicas start with --standby: the first to ask takes the engine lease and runs every channel, the other holds no lease, opens no listener and answers /readyz 503 standby, so the ingress sends it nothing, and takes over within about 20 seconds once the engine holding the lease stops. Only one engine works at a time: the lease, not the replica count, decides. Off by default: one replica."
+  type        = bool
+  default     = false
 }
 
 variable "probes_port" {

@@ -1,7 +1,10 @@
 data "azurerm_client_config" "current" {}
 
 locals {
-  database_url_secret = "database-url"
+  # The secret the apps read the database URL from: the one this module writes, or one you put in
+  # the vault yourself for a server you already run.
+  create_database_url_secret = var.existing_database_url_secret_name == null
+  database_url_secret        = coalesce(var.existing_database_url_secret_name, "database-url")
 }
 
 resource "azurerm_key_vault" "this" {
@@ -24,7 +27,10 @@ resource "azurerm_key_vault" "this" {
 }
 
 resource "azurerm_private_endpoint" "key_vault" {
-  count = var.private_endpoint_subnet_id == null ? 0 : 1
+  # With the public endpoint closed, the subnet is required (the plan refuses a vault nothing could
+  # reach), so the count is known even while the subnet's id is not, as when the subnet is created in
+  # the same apply.
+  count = var.public_network_access_enabled ? (var.private_endpoint_subnet_id == null ? 0 : 1) : 1
 
   name                = "pe-kv-${var.name}"
   resource_group_name = var.resource_group_name
@@ -61,6 +67,8 @@ resource "azurerm_role_assignment" "deployer_secrets_officer" {
 }
 
 resource "azurerm_key_vault_secret" "database_url" {
+  count = local.create_database_url_secret ? 1 : 0
+
   name         = local.database_url_secret
   key_vault_id = azurerm_key_vault.this.id
   content_type = "text/plain"

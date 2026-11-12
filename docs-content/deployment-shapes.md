@@ -53,6 +53,11 @@ gives the steps.
 
 The plan refuses more than two slots.
 
+The engine cannot yet hand its lease from the working engine to the waiting one on request: a
+switch stops the old engine, and the standby takes the lease once it is free. The
+[blue and green example](./example-blue-green.md) waits on that handover, and holds no Terraform
+until the engine has it.
+
 ## Public intake
 
 `internal_load_balancer_enabled = false` gives each environment a public address, for senders that
@@ -77,6 +82,42 @@ This is the [complete example](./example-complete.md), which also creates the ne
 group, the virtual network, the subnets and the private DNS zones.
 [Store the engine's files in Blob Storage](./store-files-in-blob-storage.md) and
 [Give partners SFTP access](./give-partners-sftp-access.md) say how.
+
+## An example for each shape
+
+Each shape has a folder under `examples/` and a page here that says what it deploys, when to
+choose it, what it costs to leave running and what it does not cover:
+
+| Shape                                                    | Example                                                      |
+| -------------------------------------------------------- | ------------------------------------------------------------ |
+| Minimal: one private slot                                | [basic](./example-basic.md)                                  |
+| Production: one engine with its warm standby             | [production](./example-production.md)                        |
+| Your own virtual network                                 | [existing-network](./example-existing-network.md)            |
+| A PostgreSQL server you already run                      | [existing-postgres](./example-existing-postgres.md)          |
+| MLLP only, over TCP ingress                              | [mllp-only](./example-mllp-only.md)                          |
+| HTTP only                                                | [http-only](./example-http-only.md)                          |
+| Storage and SFTP                                         | [complete](./example-complete.md)                            |
+| Internal only, no public ingress                         | [internal-only](./example-internal-only.md)                  |
+| Geo-redundant database backup, with the restore          | [geo-redundant-backup](./example-geo-redundant-backup.md)    |
+| Several active nodes on one database: not yet supported  | [multi-node](./example-multi-node.md)                        |
+| Blue and green with a handover: not yet supported        | [blue-green](./example-blue-green.md)                        |
+| A second region with promotion: not yet supported        | [disaster-recovery](./example-disaster-recovery.md)          |
+
+## A warm standby
+
+`standby_replica = true` runs a second replica of the app as the engine's warm standby. Both
+replicas start with `--standby`: the first to ask takes the engine lease and runs every channel, and
+the other holds no lease, opens no listener and answers `/readyz` with 503, so the ingress sends it
+nothing. Once the working engine stops, the standby takes the lease, within about 20 seconds with
+the engine's default lease. The [production example](./example-production.md) uses it, and says
+what we have not yet confirmed against a live environment.
+
+## HTTP only, or a server you already run
+
+`http_port`, in place of `mllp_ports`, gives the app HTTP ingress: Container Apps ends TLS on port
+443 and passes plain HTTP to the engine's HTTP source; the app takes one or the other.
+`existing_postgres`, in place of `postgres`, makes no server: the app reads the URL of yours from a
+Key Vault secret you put there, and the module never sees it.
 
 ## One module per concern
 

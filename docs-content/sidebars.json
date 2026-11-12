@@ -38,7 +38,20 @@
         {
           "type": "category",
           "label": "Examples",
-          "items": ["example-basic", "example-complete"]
+          "items": [
+            "example-basic",
+            "example-production",
+            "example-existing-network",
+            "example-existing-postgres",
+            "example-mllp-only",
+            "example-http-only",
+            "example-complete",
+            "example-internal-only",
+            "example-geo-redundant-backup",
+            "example-multi-node",
+            "example-blue-green",
+            "example-disaster-recovery"
+          ]
         }
       ]
     },

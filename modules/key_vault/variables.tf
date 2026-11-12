@@ -85,7 +85,24 @@ variable "log_analytics_workspace_id" {
 }
 
 variable "database_url" {
-  description = "The engine's database URL, written to the database-url secret."
+  description = "The engine's database URL, written to the database-url secret. Null with existing_database_url_secret_name, when the URL is a secret you put in the vault yourself."
   type        = string
+  default     = null
   sensitive   = true
+}
+
+variable "existing_database_url_secret_name" {
+  description = "The name of a secret you put in this vault yourself, holding the database URL of a PostgreSQL server you already run. The module then writes no database-url secret and never sees the URL, so it stays out of the Terraform state. Null, the default, with database_url: the module writes database-url from it."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.existing_database_url_secret_name == null || can(regex("^[0-9A-Za-z-]{1,127}$", var.existing_database_url_secret_name))
+    error_message = "existing_database_url_secret_name must be a Key Vault secret name: 1 to 127 letters, digits and hyphens."
+  }
+
+  validation {
+    condition     = nonsensitive(var.database_url == null) != (var.existing_database_url_secret_name == null)
+    error_message = "Set database_url or existing_database_url_secret_name, one of the two: the module writes the database-url secret from the first, or reads the secret you put in the vault under the second."
+  }
 }

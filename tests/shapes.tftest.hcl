@@ -90,7 +90,7 @@ run "http_only_and_a_standby_reach_the_app" {
   }
 
   assert {
-    condition     = output.http_port == 8080 && output.mllp_ports == tolist([])
+    condition     = output.http_port == 8080 && length(output.mllp_ports) == 0
     error_message = "http_port must reach the outputs, with no MLLP port."
   }
 

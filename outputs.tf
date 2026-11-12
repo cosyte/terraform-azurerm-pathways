@@ -17,13 +17,20 @@ output "key_vault" {
 }
 
 output "postgres" {
-  description = "The PostgreSQL server's id, host name, database and administrator login. The password is only in the database-url secret."
-  value = {
-    id                  = module.database.id
-    fqdn                = module.database.fqdn
-    database            = module.database.database
-    administrator_login = module.database.administrator_login
-  }
+  description = "The PostgreSQL server's id, host name, database and administrator login. The password is only in the database-url secret. Null with existing_postgres: the module made no server."
+  value = one([
+    for d in module.database : {
+      id                  = d.id
+      fqdn                = d.fqdn
+      database            = d.database
+      administrator_login = d.administrator_login
+    }
+  ])
+}
+
+output "database_url_secret_name" {
+  description = "The Key Vault secret the app and the migrate job read the database URL from: database-url, which the module writes, or existing_postgres.database_url_secret_name."
+  value       = module.key_vault.database_url_secret_name
 }
 
 output "log_analytics_workspace_id" {
@@ -32,8 +39,18 @@ output "log_analytics_workspace_id" {
 }
 
 output "slots" {
-  description = "Per slot: the environment's id and static IP address (where senders connect for MLLP), the app's id and name, and the migrate job's name."
+  description = "Per slot: the environment's id, static IP address (where senders connect for MLLP) and default domain, the app's id, name and address (fqdn, where senders connect for HTTP over TLS), and the migrate job's name."
   value       = module.container_apps.slots
+}
+
+output "http_port" {
+  description = "The port the engine's HTTP source listens on behind HTTP ingress, or null for MLLP over TCP ingress."
+  value       = var.http_port
+}
+
+output "standby_replica" {
+  description = "Whether the app runs a second replica as the engine's warm standby."
+  value       = var.standby_replica
 }
 
 output "mllp_ports" {

@@ -76,7 +76,7 @@ run "http_only_gets_http_ingress_with_tls_at_the_edge" {
   }
 
   assert {
-    condition     = !can(azapi_resource.app["blue"].body.properties.configuration.ingress.exposedPort) && !can(azapi_resource.app["blue"].body.properties.configuration.ingress.additionalPortMappings)
+    condition     = try(azapi_resource.app["blue"].body.properties.configuration.ingress.exposedPort, null) == null && try(azapi_resource.app["blue"].body.properties.configuration.ingress.additionalPortMappings, null) == null
     error_message = "HTTP ingress must carry no TCP port mapping."
   }
 
