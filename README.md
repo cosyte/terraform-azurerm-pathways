@@ -3,13 +3,135 @@
 A Terraform module that runs [Cosyte Pathways](https://github.com/cosyte/pathways), our open-source
 healthcare integration engine, on Azure Container Apps.
 
-**Status: not usable yet.** This repository holds only its starting files. The module is being built, and
-nothing here is released or published to a registry.
+**Status: not released.** The module is built and tested against mocked providers, and has not yet
+been applied to a real Azure subscription by us. Nothing here is published to a registry or tagged.
 
-## What it will do
+## What it creates
 
-Provision Pathways with what it needs to run: the engine itself, its database, its secrets and its key,
-with health checks and logs. The inputs, outputs and a worked example arrive with the first release.
+- A Container Apps environment per slot, on your virtual network, with an internal load balancer by
+  default, sending its logs to a Log Analytics workspace with the retention you set.
+- The Pathways app in each environment, with TCP ingress for MLLP: the first port in `mllp_ports` is
+  the main ingress port, and up to five more are additional port mappings. Readiness and liveness
+  probes ask the engine's probe listener (`/readyz` and `/livez`), and the termination grace period
+  is `drain_seconds`. It runs one replica: one engine per database.
+- A user-assigned managed identity the apps and jobs run as. It reads Key Vault secrets and, with
+  `container_registry_server`, pulls your images.
+- A Key Vault with RBAC authorization, purge protection and a deny-by-default network rule, its
+  audit log sent to the workspace, and an optional private endpoint. The database URL is a secret
+  there, and so is each master key you name. The apps read them through `secretRef`, never as plain
+  values.
+- A PostgreSQL flexible server with private access only, TLS required (1.2 at least), password and
+  Microsoft Entra authentication on, and an optional Entra administrator.
+- A Container Apps job per slot that runs `pathways migrate`, started by hand or from your pipeline.
+
+It does not create the virtual network, its subnets or the private DNS zones: you pass their ids.
+
+## Use it
+
+```hcl
+module "pathways" {
+  source = "github.com/cosyte/terraform-azurerm-pathways"
+
+  name                = "pw-example"
+  resource_group_name = "rg-pathways-example"
+  location            = "eastus2"
+
+  slots = {
+    blue = {
+      image                    = "registry.example.com/integration/my-project:3f2a91c@sha256:<digest>"
+      infrastructure_subnet_id = "<a subnet delegated to Microsoft.App/environments, /27 or larger>"
+    }
+  }
+
+  mllp_ports    = [2575]
+  drain_seconds = 60
+
+  encryption_key_secrets = {
+    PATHWAYS_KEY_2026_11 = "pathways-key-2026-11"
+  }
+
+  postgres = {
+    delegated_subnet_id = "<a subnet delegated to Microsoft.DBforPostgreSQL/flexibleServers>"
+    private_dns_zone_id = "<a private DNS zone ending in .postgres.database.azure.com>"
+  }
+
+  key_vault = {
+    private_endpoint_subnet_id = "<a subnet for private endpoints>"
+    private_dns_zone_id        = "<the privatelink.vaultcore.azure.net zone>"
+  }
+}
+```
+
+[`examples/basic`](examples/basic) is the same call as a full configuration.
+
+### What your project needs
+
+- An image built on the Pathways image (see Deploy the image in the Pathways docs), pinned by digest.
+  The module refuses an image without one.
+- A `probes` block in `pathways.yaml` that listens where the probes ask:
+
+  ```yaml
+  probes:
+    port: 9091
+    host: 0.0.0.0
+    plaintext: true
+  ```
+
+- `storage` set to `postgres`, which reads `PATHWAYS_DATABASE_URL` by default, with `tls` set: the
+  server refuses a connection without TLS.
+- Each master key in the Key Vault under the name you give in `encryption_key_secrets`, before the
+  app's revision starts. The module never generates or reads a key.
+
+### Blue and green
+
+A TCP port is unique across one Container Apps environment, so two apps cannot expose the same MLLP
+port in one environment. Each slot in `slots` gets its own environment, on its own subnet, so `blue`
+and `green` both expose the same ports. Point your senders, or the DNS name they use, at one slot's
+`static_ip` (an output) and move it when you switch. Both slots share the database: give the second
+engine `lease.standby: true` in `pathways.yaml`, so it waits instead of being refused.
+
+### Schema changes
+
+`pathways start` applies the expand steps of a schema change itself. To leave every schema change to
+the migrate job, set `app_start_args = ["start", "-C", "/project", "--no-migrate"]` and start the job
+before the new revision:
+
+```sh
+az containerapp job start --name pw-example-blue-migrate --resource-group rg-pathways-example
+```
+
+### Applying
+
+The Key Vault denies every network by default, and Terraform writes the database URL secret into it,
+so the machine that applies needs a way in: run it inside the virtual network with the private
+endpoint, or set `key_vault.public_network_access_enabled` and list the runner's address in
+`key_vault.allowed_ip_ranges`. Whoever applies gets the Key Vault Secrets Officer role on the vault.
+
+The database password is generated by Terraform, so it is in the state: keep the state encrypted and
+private, as you would the database itself.
+
+## Limits we rely on
+
+The module checks these when you plan: at most five additional TCP ports beside the main one,
+exposed ports unique across an environment, port 36985 reserved, and a termination grace period of
+at most 600 seconds. They are our reading of the Container Apps ingress and health probe
+documentation, and have not yet been confirmed against a live environment.
+
+## Not in this release
+
+Alerts on the engine's own metrics wait for the metric names Pathways will publish. There are no
+alert rules yet.
+
+## Security
+
+This module carries messages that hold patient data. Its defaults are private networking, TLS to the
+database, secrets only in Key Vault and least-privilege roles. We sign Business Associate
+Agreements.
+
+## Development
+
+The checks are in [CLAUDE.md](CLAUDE.md#gate) and run on every pull request. Tests plan against
+mocked providers and never reach Azure.
 
 ## License
 

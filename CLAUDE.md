@@ -6,14 +6,28 @@ layout for one module per repository: `versions.tf`, `variables.tf`, `main.tf`, 
 
 ## Gate
 
-From the repo root, on the pinned versions (`mise install`):
+From the repo root, on the pinned versions. `mise exec` puts them on the path; it skips tflint,
+whose mise backend fails its attestation check, and `scripts/policy.sh` downloads the pinned tflint
+and checks its checksum instead:
 
 ```sh
-terraform fmt -check -recursive
+MISE_DISABLE_TOOLS=tflint mise exec -- terraform fmt -check -recursive
+scripts/check-no-emdash.sh
+MISE_DISABLE_TOOLS=tflint mise exec -- scripts/validate.sh
+MISE_DISABLE_TOOLS=tflint mise exec -- actionlint .github/workflows/*.yml
+MISE_DISABLE_TOOLS=tflint mise exec -- scripts/policy.sh
+MISE_DISABLE_TOOLS=tflint mise exec -- tests/run.sh
 ```
 
-Add each further check here in the same change that adds it: `terraform validate`, `terraform test`
-with mocked providers, tflint, trivy config and actionlint.
+`scripts/validate.sh` runs `terraform init -backend=false` and `terraform validate` in the module and
+in each example. `scripts/policy.sh` runs tflint with the azurerm ruleset (pinned in `.tflint.hcl`)
+and `trivy config` at HIGH and CRITICAL. `tests/run.sh` runs `terraform test` against mocked azurerm
+and azapi providers, plan only, with every Azure credential variable unset; it refuses a run block
+that does not plan. None of them needs or reads an Azure credential.
+
+CI runs the same checks on every pull request: `fmt`, `validate`, `test`, `policy` and `actionlint`
+in `ci.yml`, `no-emdash` (the tracked files, the PR title and body, and the commit messages) in
+`no-emdash.yml`, and `pr-title` in `pr-title.yml`.
 
 ## Hazard: this module creates infrastructure that carries PHI
 

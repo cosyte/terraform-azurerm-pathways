@@ -1,0 +1,129 @@
+# The module's checks. None needs an Azure credential: no job signs in to Azure, reads a secret or
+# declares an environment, so a run reaches the same answer on a fork, on a branch and on main.
+#
+#   fmt            terraform fmt -check over the module, the examples and the tests
+#   validate       terraform init -backend=false and validate, in the module and in each example
+#   test           tests/run.sh: terraform test against mocked providers, plan only
+#   policy         scripts/policy.sh: tflint with the azurerm ruleset, and trivy config
+#   actionlint     every workflow file
+#
+# Terraform's version is the pin in mise.toml, so CI and a laptop run the same one.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read the pinned Terraform version
+        id: tf_version
+        run: echo "value=$(awk -F'"' '/^terraform[[:space:]]*=/ {print $(NF-1)}' mise.toml)" >> "$GITHUB_OUTPUT"
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ steps.tf_version.outputs.value }}
+          terraform_wrapper: false
+      - name: terraform fmt -check
+        run: terraform fmt -check -recursive -diff
+
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read the pinned Terraform version
+        id: tf_version
+        run: echo "value=$(awk -F'"' '/^terraform[[:space:]]*=/ {print $(NF-1)}' mise.toml)" >> "$GITHUB_OUTPUT"
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ steps.tf_version.outputs.value }}
+          terraform_wrapper: false
+      - name: terraform validate, the module and each example
+        env:
+          TF_IN_AUTOMATION: "1"
+        run: scripts/validate.sh
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read the pinned Terraform version
+        id: tf_version
+        run: echo "value=$(awk -F'"' '/^terraform[[:space:]]*=/ {print $(NF-1)}' mise.toml)" >> "$GITHUB_OUTPUT"
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ steps.tf_version.outputs.value }}
+          terraform_wrapper: false
+      - name: terraform test, mocked providers, plan only
+        run: tests/run.sh
+
+  policy:
+    name: policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: tflint (azurerm ruleset) and trivy config
+        env:
+          # tflint --init reads the ruleset release through the GitHub API; the token only lifts
+          # the rate limit.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/policy.sh
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install actionlint at the version pinned in mise.toml
+        run: |
+          set -euo pipefail
+          v=$(awk -F'"' '/^actionlint[[:space:]]*=/ {print $(NF-1)}' mise.toml)
+          if [ -z "$v" ]; then
+            echo "::error::could not read the actionlint pin from mise.toml"
+            exit 1
+          fi
+          base="https://github.com/rhysd/actionlint/releases/download/v${v}"
+          tarball="actionlint_${v}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/${tarball}" "${base}/${tarball}"
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/checksums.txt" "${base}/actionlint_${v}_checksums.txt"
+          ( cd "${RUNNER_TEMP}" && grep " ${tarball}\$" checksums.txt | sha256sum -c - )
+          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}" actionlint
+          "${RUNNER_TEMP}/actionlint" --version
+      - name: actionlint over .github/workflows/
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files '.github/workflows/*.yml' '.github/workflows/*.yaml')
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no workflow files found under .github/workflows/"
+            exit 1
+          fi
+          "${RUNNER_TEMP}/actionlint" -color "${files[@]}"
