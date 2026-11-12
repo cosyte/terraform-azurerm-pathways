@@ -1,3 +1,5 @@
+data "azurerm_client_config" "current" {}
+
 resource "random_password" "postgres" {
   length = 40
   # Letters and digits only, so the password needs no escaping inside the database URL.
@@ -8,18 +10,18 @@ resource "azurerm_postgresql_flexible_server" "this" {
   name                          = "psql-${var.name}"
   resource_group_name           = var.resource_group_name
   location                      = var.location
-  version                       = var.postgres.version
-  sku_name                      = var.postgres.sku_name
-  storage_mb                    = var.postgres.storage_mb
-  backup_retention_days         = var.postgres.backup_retention_days
-  geo_redundant_backup_enabled  = var.postgres.geo_redundant_backup_enabled
-  zone                          = var.postgres.zone
-  delegated_subnet_id           = var.postgres.delegated_subnet_id
-  private_dns_zone_id           = var.postgres.private_dns_zone_id
+  version                       = var.postgres_version
+  sku_name                      = var.sku_name
+  storage_mb                    = var.storage_mb
+  backup_retention_days         = var.backup_retention_days
+  geo_redundant_backup_enabled  = var.geo_redundant_backup_enabled
+  zone                          = var.zone
+  delegated_subnet_id           = var.delegated_subnet_id
+  private_dns_zone_id           = var.private_dns_zone_id
   public_network_access_enabled = false
   administrator_login           = "pathways_admin"
   administrator_password        = random_password.postgres.result
-  tags                          = local.tags
+  tags                          = var.tags
 
   authentication {
     active_directory_auth_enabled = true
@@ -28,7 +30,7 @@ resource "azurerm_postgresql_flexible_server" "this" {
   }
 
   dynamic "high_availability" {
-    for_each = var.postgres.high_availability_standby_zone == null ? [] : [var.postgres.high_availability_standby_zone]
+    for_each = var.high_availability_standby_zone == null ? [] : [var.high_availability_standby_zone]
     content {
       mode                      = "ZoneRedundant"
       standby_availability_zone = high_availability.value
@@ -63,12 +65,12 @@ resource "azurerm_postgresql_flexible_server_configuration" "ssl_min_protocol_ve
 }
 
 resource "azurerm_postgresql_flexible_server_active_directory_administrator" "this" {
-  count = var.postgres.entra_administrator == null ? 0 : 1
+  count = var.entra_administrator == null ? 0 : 1
 
   server_name         = azurerm_postgresql_flexible_server.this.name
   resource_group_name = var.resource_group_name
   tenant_id           = data.azurerm_client_config.current.tenant_id
-  object_id           = var.postgres.entra_administrator.object_id
-  principal_name      = var.postgres.entra_administrator.principal_name
-  principal_type      = var.postgres.entra_administrator.principal_type
+  object_id           = var.entra_administrator.object_id
+  principal_name      = var.entra_administrator.principal_name
+  principal_type      = var.entra_administrator.principal_type
 }

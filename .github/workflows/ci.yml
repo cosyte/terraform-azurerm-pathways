@@ -1,9 +1,9 @@
 # The module's checks. None needs an Azure credential: no job signs in to Azure, reads a secret or
 # declares an environment, so a run reaches the same answer on a fork, on a branch and on main.
 #
-#   fmt            terraform fmt -check over the module, the examples and the tests
-#   validate       terraform init -backend=false and validate, in the module and in each example
-#   test           tests/run.sh: terraform test against mocked providers, plan only
+#   fmt            terraform fmt -check over the root, the modules, the examples and the tests
+#   validate       terraform init -backend=false and validate, in the root, each module and each example
+#   test           tests/run.sh: terraform test in the root and each module, mocked providers, plan only
 #   policy         scripts/policy.sh: tflint with the azurerm ruleset, and trivy config
 #   actionlint     every workflow file
 #
@@ -57,7 +57,7 @@ jobs:
         with:
           terraform_version: ${{ steps.tf_version.outputs.value }}
           terraform_wrapper: false
-      - name: terraform validate, the module and each example
+      - name: terraform validate, the root, each module and each example
         env:
           TF_IN_AUTOMATION: "1"
         run: scripts/validate.sh
@@ -77,7 +77,7 @@ jobs:
         with:
           terraform_version: ${{ steps.tf_version.outputs.value }}
           terraform_wrapper: false
-      - name: terraform test, mocked providers, plan only
+      - name: terraform test, the root and each module, mocked providers, plan only
         run: tests/run.sh
 
   policy:

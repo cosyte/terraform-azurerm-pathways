@@ -1,3 +1,55 @@
+data "azurerm_resource_group" "this" {
+  name = var.resource_group_name
+}
+
+locals {
+  # The one workload profile every environment has; the app and the job run on it.
+  workload_profile = "Consumption"
+
+  # The Container App secret that holds the database URL; the Key Vault secret is
+  # var.database_url_secret_id.
+  database_url_secret = "database-url"
+
+  # Container App secret names: lowercase letters, digits and hyphens.
+  key_secrets = {
+    for env_name, kv_name in var.encryption_key_secrets :
+    env_name => {
+      app_secret_name = "key-${lower(kv_name)}"
+      url             = "${var.key_vault_uri}secrets/${kv_name}"
+    }
+  }
+
+  app_secrets = concat(
+    [{
+      name        = local.database_url_secret
+      keyVaultUrl = var.database_url_secret_id
+      identity    = var.identity_id
+    }],
+    [for k in values(local.key_secrets) : {
+      name        = k.app_secret_name
+      keyVaultUrl = k.url
+      identity    = var.identity_id
+    }],
+  )
+
+  app_env = concat(
+    [{ name = "PATHWAYS_DATABASE_URL", secretRef = local.database_url_secret }],
+    [for env_name, k in local.key_secrets : { name = env_name, secretRef = k.app_secret_name }],
+    [for name, value in var.environment_variables : { name = name, value = value }],
+  )
+
+  ip_restrictions = [
+    for i, cidr in var.ingress_allowed_cidrs : {
+      name           = "allow-${i}"
+      action         = "Allow"
+      ipAddressRange = cidr
+    }
+  ]
+
+  main_port        = var.mllp_ports[0]
+  additional_ports = slice(var.mllp_ports, 1, length(var.mllp_ports))
+}
+
 # One environment per slot. A TCP port is unique across an environment, so blue and green each get
 # their own and can expose the same MLLP ports at once. TCP ingress needs an environment on a
 # virtual network: each slot names its own infrastructure subnet.
@@ -10,8 +62,8 @@ resource "azurerm_container_app_environment" "this" {
   infrastructure_subnet_id       = each.value.infrastructure_subnet_id
   internal_load_balancer_enabled = var.internal_load_balancer_enabled
   logs_destination               = "log-analytics"
-  log_analytics_workspace_id     = azurerm_log_analytics_workspace.this.id
-  tags                           = local.tags
+  log_analytics_workspace_id     = var.log_analytics_workspace_id
+  tags                           = var.tags
 
   workload_profile {
     name                  = local.workload_profile
@@ -31,11 +83,11 @@ resource "azapi_resource" "app" {
   name      = "${var.name}-${each.key}"
   parent_id = data.azurerm_resource_group.this.id
   location  = var.location
-  tags      = local.tags
+  tags      = var.tags
 
   identity {
     type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.this.id]
+    identity_ids = [var.identity_id]
   }
 
   body = {
@@ -63,7 +115,7 @@ resource "azapi_resource" "app" {
         secrets = local.app_secrets
         registries = var.container_registry_server == null ? [] : [{
           server   = var.container_registry_server
-          identity = azurerm_user_assigned_identity.this.id
+          identity = var.identity_id
         }]
       }
       template = {
@@ -133,8 +185,6 @@ resource "azapi_resource" "app" {
   }
 
   response_export_values = ["properties.latestRevisionName"]
-
-  depends_on = [azurerm_role_assignment.identity_secrets_user]
 }
 
 # pathways migrate, run by hand or from a pipeline before a slot's new revision takes traffic:
@@ -149,11 +199,11 @@ resource "azurerm_container_app_job" "migrate" {
   workload_profile_name        = local.workload_profile
   replica_timeout_in_seconds   = var.migrate_timeout_seconds
   replica_retry_limit          = 0
-  tags                         = local.tags
+  tags                         = var.tags
 
   identity {
     type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.this.id]
+    identity_ids = [var.identity_id]
   }
 
   manual_trigger_config {
@@ -163,15 +213,15 @@ resource "azurerm_container_app_job" "migrate" {
 
   secret {
     name                = local.database_url_secret
-    identity            = azurerm_user_assigned_identity.this.id
-    key_vault_secret_id = azurerm_key_vault_secret.database_url.versionless_id
+    identity            = var.identity_id
+    key_vault_secret_id = var.database_url_secret_id
   }
 
   dynamic "registry" {
     for_each = var.container_registry_server == null ? [] : [var.container_registry_server]
     content {
       server   = registry.value
-      identity = azurerm_user_assigned_identity.this.id
+      identity = var.identity_id
     }
   }
 
@@ -197,6 +247,4 @@ resource "azurerm_container_app_job" "migrate" {
       }
     }
   }
-
-  depends_on = [azurerm_role_assignment.identity_secrets_user]
 }
