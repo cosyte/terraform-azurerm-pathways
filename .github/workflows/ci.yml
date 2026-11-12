@@ -6,6 +6,9 @@
 #   test           tests/run.sh: terraform test in the root and each module, mocked providers, plan only
 #   policy         scripts/policy.sh: tflint with the azurerm ruleset, and trivy config
 #   actionlint     every workflow file
+#   docs           docs-content/: scripts/docs.py's own tests, scripts/docs.sh --check (the reference of
+#                  every input and output, and every example's page and files, against the code), and
+#                  cosyte-docs-content (the docs-content standard's structure check)
 #
 # Terraform's version is the pin in mise.toml, so CI and a laptop run the same one.
 name: CI
@@ -127,3 +130,21 @@ jobs:
             exit 1
           fi
           "${RUNNER_TEMP}/actionlint" -color "${files[@]}"
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: scripts/docs.py's tests
+        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+      - name: The reference and the example pages match the code, and every example has a page
+        run: scripts/docs.sh --check
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: The docs-content standard's structure check
+        run: npx --yes --package=@cosyte/script-utils@0.1.12 -- cosyte-docs-content

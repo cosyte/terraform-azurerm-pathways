@@ -14,6 +14,9 @@
 A Terraform module that runs [Cosyte Pathways](https://github.com/cosyte/pathways), our open-source
 healthcare integration engine, on Azure Container Apps.
 
+**Documentation: [docs.cosyte.com/terraform-azurerm-pathways](https://docs.cosyte.com/terraform-azurerm-pathways)**,
+with a tutorial, how-to guides, a page per example and the reference of every input and output.
+
 ---
 
 ## Contents
@@ -101,8 +104,9 @@ module under `modules/` can also be used on its own; its README says what it nee
 ├── examples/
 │   ├── basic/           the root module called with one slot
 │   └── complete/        end to end: the network, the module with storage and SFTP, one channel
+├── docs-content/        the pages docs.cosyte.com renders: guides, a page per example, the reference
 ├── tests/               the root module's tests, and run.sh, which runs every module's
-└── scripts/             validate.sh, policy.sh and check-no-emdash.sh, run by the gate and CI
+└── scripts/             validate.sh, policy.sh, check-no-emdash.sh and docs.sh, run by the gate and CI
 ```
 
 Each module has the same four files as the root, a README and a `tests/` folder of its own.
@@ -340,6 +344,11 @@ live test shows a longer grace period is honored, plan for a drain of 30 seconds
 
 ## Documentation
 
+- [docs.cosyte.com/terraform-azurerm-pathways](https://docs.cosyte.com/terraform-azurerm-pathways)
+  is the full documentation: a tutorial that deploys the basic example, how-to guides for the
+  network, storage, SFTP and upgrades, the deployment shapes, a page per example with what it
+  deploys and what it costs to leave running, and the reference of every input and output, generated
+  from the code. Its source is [`docs-content/`](docs-content).
 - Each module's own README, under [`modules/`](modules), says what that module needs and creates
   when you use it on its own.
 - [`examples/basic`](examples/basic) is a full configuration of the root module with one slot.
