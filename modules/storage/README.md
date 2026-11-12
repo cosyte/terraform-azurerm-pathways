@@ -17,7 +17,8 @@ SFTP and for the engine's own blobs:
 - the blob service's read, write and delete logs sent to a Log Analytics workspace.
 
 The plan refuses an IP range wider than a `/8` (`0.0.0.0/0` included), a list of ranges that adds up
-to every IPv4 address, an IPv6 range, a `/31` or `/32`, a private range, a public endpoint with no
+to more addresses than one `/8` holds (16,777,216; private ranges are refused, so a list covering
+every public address would never add up to all of IPv4), an IPv6 range, a `/31` or `/32`, a private range, a public endpoint with no
 ranges, a user with no key, a private key, and a permission other than create, write, list, read and
 delete.
 

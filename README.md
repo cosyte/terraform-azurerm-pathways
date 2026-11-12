@@ -385,7 +385,11 @@ about your deployment: how you run it is yours to review.
   most vaults do; every other caller still needs a role on the vault.
 - The storage account, when on, has no public network access unless `storage.allowed_ip_ranges`
   names the SFTP clients, and the plan refuses `0.0.0.0/0`, any range wider than a `/8`, and a list
-  that adds up to every IPv4 address. Its SFTP users sign in with SSH keys only, each to its own
+  that adds up to more addresses than one `/8` holds (16,777,216). That limit sits well under the
+  public IPv4 space on purpose: private ranges are refused, so a list of narrow ranges covering every
+  public address would never add up to all of IPv4, yet would open the account as widely as
+  `0.0.0.0/0`. The firewall also lets Azure's trusted services through (`bypass = AzureServices`);
+  each still needs a role on the account to read or write. Its SFTP users sign in with SSH keys only, each to its own
   container, and the engine with its managed identity: the account's shared keys are off.
 - The database password is in the Terraform state (see [Applying](#applying)): keep the state
   encrypted and private.

@@ -434,13 +434,15 @@ variable "storage" {
     error_message = "storage.allowed_ip_ranges must not hold a range wider than a /8 (0.0.0.0/0 included): the account carries PHI. Name your SFTP clients' ranges."
   }
 
-  # Ranges each narrow enough can still add up to every IPv4 address. Overlaps are counted twice, so
-  # the sum can only overstate the coverage.
+  # Ranges each narrow enough can still add up to most of the internet: since private ranges are
+  # refused, a list that covers every public address never reaches 2^32. So the whole list may hold
+  # no more addresses than one /8 (2^24), well under the public space and far more than any set of
+  # SFTP partners needs. Overlaps are counted twice, so the sum can only overstate the coverage.
   validation {
     condition = try(sum(concat([0], [
       for c in distinct(var.storage.allowed_ip_ranges) : strcontains(c, "/") ? pow(2, 32 - tonumber(split("/", c)[1])) : 1
-    ])) < pow(2, 32), false)
-    error_message = "The ranges in storage.allowed_ip_ranges add up to every IPv4 address: the account carries PHI. Name your SFTP clients' ranges."
+    ])) <= pow(2, 24), false)
+    error_message = "The ranges in storage.allowed_ip_ranges add up to more addresses than one /8 (16,777,216): the account carries PHI. Name your SFTP clients' ranges."
   }
 
   # Two ranges overlap when the wider one holds the narrower one's first address.
