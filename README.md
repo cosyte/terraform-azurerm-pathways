@@ -23,6 +23,8 @@ healthcare integration engine, on Azure Container Apps.
 - [What it creates](#what-it-creates)
 - [Layout](#layout)
 - [Use it](#use-it)
+- [Storage and SFTP](#storage-and-sftp)
+- [What it costs](#what-it-costs)
 - [Limits we rely on](#limits-we-rely-on)
 - [Documentation](#documentation)
 - [Security](#security)
@@ -35,7 +37,7 @@ healthcare integration engine, on Azure Container Apps.
 
 Pathways carries messages that hold patient data, and running it on Azure takes more than the app:
 a Container Apps environment on your virtual network, a managed identity, a Key Vault, a PostgreSQL
-server and a migrate job, wired together. This module creates them with private networking, TLS to
+server and a migrate job, wired together, and often a place partners drop and fetch files over SFTP. This module creates them with private networking, TLS to
 the database, secrets only in Key Vault and least-privilege roles as the defaults, and it checks the
 Container Apps limits it relies on when you plan rather than when you apply.
 
@@ -68,8 +70,13 @@ publish. There are no alert rules yet.
 - A PostgreSQL flexible server with private access only, TLS required (1.2 at least), password and
   Microsoft Entra authentication on, and an optional Entra administrator.
 - A Container Apps job per slot that runs `pathways migrate`, started by hand or from your pipeline.
+- Optionally, off unless `storage.enabled` is true: a storage account with SFTP for partners' files
+  and the engine's own blobs, private by default, encrypted with a key from the Key Vault, with one
+  container per SFTP user and blob data access for the app's identity. See
+  [Storage and SFTP](#storage-and-sftp).
 
 It does not create the virtual network, its subnets or the private DNS zones: you pass their ids.
+[`examples/complete`](examples/complete) creates them too.
 
 ---
 
@@ -89,9 +96,11 @@ module under `modules/` can also be used on its own; its README says what it nee
 │   ├── database/        the PostgreSQL flexible server and the database URL
 │   ├── identity/        the managed identity the app and the jobs run as
 │   ├── key_vault/       the Key Vault, its secret, its roles and its audit log
-│   └── logs/            the Log Analytics workspace
+│   ├── logs/            the Log Analytics workspace
+│   └── storage/         optional: the storage account with SFTP, its key, users and logs
 ├── examples/
-│   └── basic/           the root module called with one slot
+│   ├── basic/           the root module called with one slot
+│   └── complete/        end to end: the network, the module with storage and SFTP, one channel
 ├── tests/               the root module's tests, and run.sh, which runs every module's
 └── scripts/             validate.sh, policy.sh and check-no-emdash.sh, run by the gate and CI
 ```
@@ -137,6 +146,10 @@ module "pathways" {
 ```
 
 [`examples/basic`](examples/basic) is the same call as a full configuration.
+[`examples/complete`](examples/complete) stands Pathways up end to end: the resource group, the
+virtual network, its subnets and private DNS zones, the module with its database, storage and SFTP
+for one partner, and, in `project/`, the Pathways project with one channel that takes orders over
+MLLP and writes each to the partner's SFTP container.
 
 ### What your project needs
 
@@ -193,6 +206,118 @@ private, as you would the database itself.
 
 ---
 
+## Storage and SFTP
+
+Set `storage.enabled = true` for a storage account with SFTP. It needs a blob private endpoint: the
+engine reads the account through it, since Azure Storage's IP rules do not apply to traffic from the
+same region.
+
+```hcl
+  storage = {
+    enabled                    = true
+    private_endpoint_subnet_id = "<a subnet for private endpoints>"
+    private_dns_zone_id        = "<the privatelink.blob.core.windows.net zone>"
+
+    # Only for SFTP clients outside your virtual network: their public IPv4 addresses or ranges.
+    public_network_access_enabled = true
+    allowed_ip_ranges             = ["198.51.100.0/24"]
+
+    sftp_users = {
+      lab = {
+        ssh_public_keys = ["ssh-ed25519 AAAA... lab"]
+        permissions     = ["read", "list", "delete"]
+      }
+    }
+  }
+```
+
+The account has hierarchical namespace and SFTP on, its shared keys off, HTTPS and TLS 1.2 at least,
+no public containers and no public network access unless you open it. Unless
+`customer_managed_key_enabled = false`, it is encrypted with a key the module creates in the Key
+Vault and rotates every year; whoever applies gets Key Vault Crypto Officer on the vault to create
+it. Its read, write and delete logs go to the Log Analytics workspace; they name blobs and callers,
+never what a blob holds, so keep patient data out of file names.
+
+Each SFTP user gets a container of its own, `sftp-<user>`, as its home directory, and a permission on
+that container alone. It signs in with an SSH key, never a password, as `<account>.<user>` at
+`<account>.blob.core.windows.net`, port 22: the `storage` output gives both. The default
+permissions, create, write and list, let a partner drop files; a partner that fetches files needs
+read, list and delete.
+
+The app's identity gets Storage Blob Data Contributor on each container, and the app gets these
+environment variables, so a channel names the account and containers without a key:
+
+| Variable                         | Value                                                          |
+| -------------------------------- | -------------------------------------------------------------- |
+| `AZURE_CLIENT_ID`                | the client id of the app's identity, for Azure's default chain |
+| `PATHWAYS_AZBLOB_ACCOUNT`        | the account's name                                             |
+| `PATHWAYS_AZBLOB_CONTAINER`      | the engine's own container                                     |
+| `PATHWAYS_SFTP_<USER>_CONTAINER` | each SFTP user's container, the user's name in capitals        |
+
+```yaml
+source:
+  file:
+    dir: inbox
+    minAge: 1m
+    azblob:
+      account: { env: PATHWAYS_AZBLOB_ACCOUNT }
+      container: { env: PATHWAYS_SFTP_LAB_CONTAINER }
+```
+
+See Read and write Azure Blob Storage in the Pathways docs for the `azblob` block; the engine's image
+needs the `@azure/storage-blob` and `@azure/identity` packages it names.
+
+### What SFTP on Blob Storage cannot do
+
+From Microsoft's pages on
+[SFTP support for Blob Storage](https://learn.microsoft.com/azure/storage/blobs/secure-file-transfer-protocol-support),
+[authorizing SFTP access](https://learn.microsoft.com/azure/storage/blobs/secure-file-transfer-protocol-support-authorize-access),
+[its known issues](https://learn.microsoft.com/azure/storage/blobs/secure-file-transfer-protocol-known-issues)
+and [network security for Azure Storage](https://learn.microsoft.com/azure/storage/common/storage-network-security).
+Check them before you rely on a point: the service changes.
+
+- **No Microsoft Entra ID sign-in.** SFTP clients sign in only as local users of the account, with a
+  password or an SSH key. This module turns passwords off. A local user is not a Microsoft Entra
+  identity: there is no conditional access or multi-factor sign-in for it, and you rotate its keys
+  yourself by changing `ssh_public_keys`.
+- **A home directory is not a jail.** It only sets where a session starts; a user can reach any path
+  in a container its permissions cover. That is why each user has a container of its own here.
+- **It needs hierarchical namespace,** which is set when the account is created: turning it off
+  replaces the account. Some Blob Storage features are not available on such an account; Microsoft's
+  Blob Storage feature support page lists them.
+- **SFTP only:** no FTP and no FTPS.
+- **Nothing we found hides a file until its upload ends.** Give a source that reads an SFTP
+  container a `minAge` longer than an upload takes, so the engine does not take a file half written.
+- **IP rules take public IPv4 only:** no IPv6, a single address rather than a `/31` or `/32`, no
+  private range, and no effect on traffic from the account's own region. The plan refuses the
+  first three; the private endpoint covers the last.
+- **SFTP is billed by the hour while it is on,** whether anyone connects or not. Set
+  `storage.sftp_enabled = false` to stop it while no partner needs it.
+
+---
+
+## What it costs
+
+We give the drivers, not prices: Azure's pricing pages and your agreement with Microsoft set those.
+
+- **Container Apps:** the vCPU and memory of one always-on replica per slot (`cpu`, `memory`), and
+  the migrate job while it runs.
+- **PostgreSQL flexible server:** its compute (`postgres.sku_name`), storage (`postgres.storage_mb`),
+  backups past the included amount, geo-redundant backup, and a high-availability standby, which
+  doubles the compute.
+- **Log Analytics:** each GB the environments, the Key Vault and the storage account send, and
+  retention past the included days (`log_retention_days`).
+- **Key Vault:** its operations, the engine's secret reads and, with a customer-managed key, each
+  wrap and unwrap the storage account makes.
+- **Storage, when on:** the data stored (soft-deleted data included, for
+  `storage.soft_delete_retention_days`), the read, write and list operations, the redundancy
+  (`storage.replication_type`), and **SFTP by the hour while it is enabled**.
+- **Private endpoints:** each one by the hour, and the data through it: one for the Key Vault when
+  you use one, one for the storage account.
+- **Data transfer** out of the region.
+
+---
+
 ## Limits we rely on
 
 The module checks these when you plan, from Microsoft's Container Apps ingress documentation (read
@@ -218,6 +343,8 @@ live test shows a longer grace period is honored, plan for a drain of 30 seconds
 - Each module's own README, under [`modules/`](modules), says what that module needs and creates
   when you use it on its own.
 - [`examples/basic`](examples/basic) is a full configuration of the root module with one slot.
+- [`examples/complete`](examples/complete) stands Pathways up end to end, with storage, SFTP and one
+  channel.
 - Every input is described in [`variables.tf`](variables.tf), with what the plan refuses, and every
   output in [`outputs.tf`](outputs.tf).
 - [Cosyte Pathways](https://github.com/cosyte/pathways) documents the engine itself, including
@@ -235,7 +362,10 @@ public issue.
 
 This module carries messages that hold patient data. Its defaults are private networking, TLS to the
 database, secrets only in Key Vault and least-privilege roles. We sign Business Associate
-Agreements.
+Agreements. Your use of Azure itself is between you and Microsoft: you need Microsoft's own Business
+Associate Agreement terms, which Microsoft offers through its Product Terms, and should check that
+they cover each service this module creates. A safe default here is a starting point, not a finding
+about your deployment: how you run it is yours to review.
 
 - MLLP has no authentication of its own. With `internal_load_balancer_enabled = false` the
   environment has a public address, so the plan refuses it unless `ingress_allowed_cidrs` names the
@@ -253,6 +383,14 @@ Agreements.
   create.
 - The Key Vault's network rule lets Azure's trusted services through (`bypass = AzureServices`), as
   most vaults do; every other caller still needs a role on the vault.
+- The storage account, when on, has no public network access unless `storage.allowed_ip_ranges`
+  names the SFTP clients, and the plan refuses `0.0.0.0/0`, any range wider than a `/8`, and a list
+  that adds up to more addresses than one `/8` holds (16,777,216). That limit sits well under the
+  public IPv4 space on purpose: private ranges are refused, so a list of narrow ranges covering every
+  public address would never add up to all of IPv4, yet would open the account as widely as
+  `0.0.0.0/0`. The firewall also lets Azure's trusted services through (`bypass = AzureServices`);
+  each still needs a role on the account to read or write. Its SFTP users sign in with SSH keys only, each to its own
+  container, and the engine with its managed identity: the account's shared keys are off.
 - The database password is in the Terraform state (see [Applying](#applying)): keep the state
   encrypted and private.
 - No test or example applies to a real account: the tests plan against mocked providers and never

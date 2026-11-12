@@ -343,3 +343,162 @@ variable "key_vault" {
     error_message = "Nothing could reach the Key Vault: the apps could not read their secrets and the apply could not write database-url. Set key_vault.private_endpoint_subnet_id and key_vault.private_dns_zone_id (recommended), or set key_vault.public_network_access_enabled = true with key_vault.allowed_ip_ranges naming the runner and the environments' outbound addresses."
   }
 }
+
+variable "storage" {
+  description = <<-EOT
+    An optional storage account for files partners send and fetch over SFTP, and for the engine's own
+    blobs: off unless enabled is true. The modules/storage README says what each setting does. The
+    account has hierarchical namespace and SFTP on, no public network access, a blob private endpoint
+    (private_endpoint_subnet_id and private_dns_zone_id, a zone named
+    privatelink.blob.core.windows.net, are required: the engine reads through it), its shared keys
+    off, and, unless customer_managed_key_enabled is false, a key from this module's Key Vault.
+    public_network_access_enabled with allowed_ip_ranges opens it to SFTP clients at named public
+    IPv4 ranges. Each user in sftp_users signs in with an SSH key, never a password, and reaches only
+    its own container, sftp-<user>. The engine's identity gets blob data access on each container,
+    and the app gets AZURE_CLIENT_ID, PATHWAYS_AZBLOB_ACCOUNT, PATHWAYS_AZBLOB_CONTAINER and
+    PATHWAYS_SFTP_<USER>_CONTAINER for its channels to read.
+  EOT
+  type = object({
+    enabled                       = optional(bool, false)
+    account_name                  = optional(string)
+    container_name                = optional(string, "pathways")
+    replication_type              = optional(string, "LRS")
+    sftp_enabled                  = optional(bool, true)
+    public_network_access_enabled = optional(bool, false)
+    allowed_ip_ranges             = optional(list(string), [])
+    private_endpoint_subnet_id    = optional(string)
+    private_dns_zone_id           = optional(string)
+    customer_managed_key_enabled  = optional(bool, true)
+    soft_delete_retention_days    = optional(number, 7)
+    sftp_users = optional(map(object({
+      ssh_public_keys = list(string)
+      permissions     = optional(list(string), ["create", "write", "list"])
+    })), {})
+  })
+  default = {}
+
+  validation {
+    condition     = !var.storage.enabled || (var.storage.private_endpoint_subnet_id != null && var.storage.private_dns_zone_id != null)
+    error_message = "storage needs private_endpoint_subnet_id and private_dns_zone_id (the privatelink.blob.core.windows.net zone): the engine reads the account through its private endpoint, since Azure Storage's IP rules do not apply to traffic from the same region."
+  }
+
+  validation {
+    condition     = var.storage.account_name == null || can(regex("^[a-z0-9]{3,24}$", var.storage.account_name))
+    error_message = "storage.account_name must be 3 to 24 lowercase letters and digits."
+  }
+
+  validation {
+    condition     = can(regex("^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$", var.storage.container_name)) && !strcontains(var.storage.container_name, "--") && !startswith(var.storage.container_name, "sftp-")
+    error_message = "storage.container_name must be 3 to 63 lowercase letters, digits and single hyphens, starting and ending with a letter or digit, and must not start with sftp-: each SFTP user's container is sftp-<user>."
+  }
+
+  validation {
+    condition     = contains(["LRS", "ZRS", "GRS", "RAGRS", "GZRS", "RAGZRS"], var.storage.replication_type)
+    error_message = "storage.replication_type must be LRS, ZRS, GRS, RAGRS, GZRS or RAGZRS."
+  }
+
+  validation {
+    condition     = var.storage.sftp_enabled || length(var.storage.sftp_users) == 0
+    error_message = "storage.sftp_users needs storage.sftp_enabled = true: a local user can sign in only over SFTP."
+  }
+
+  validation {
+    condition     = !var.storage.public_network_access_enabled || length(var.storage.allowed_ip_ranges) > 0
+    error_message = "storage.public_network_access_enabled = true needs storage.allowed_ip_ranges naming the SFTP clients' public addresses: the account carries PHI."
+  }
+
+  validation {
+    condition     = length(var.storage.allowed_ip_ranges) == 0 || var.storage.public_network_access_enabled
+    error_message = "storage.allowed_ip_ranges has no effect unless storage.public_network_access_enabled is true."
+  }
+
+  validation {
+    condition = alltrue([
+      for c in var.storage.allowed_ip_ranges :
+      can(regex("^[0-9]{1,3}(\\.[0-9]{1,3}){3}(/[1-9][0-9]?)?$", c)) && can(cidrhost(strcontains(c, "/") ? c : "${c}/32", 0))
+    ])
+    error_message = "Each entry of storage.allowed_ip_ranges must be a public IPv4 address or range, such as 203.0.113.7 or 198.51.100.0/24: no spaces, no leading zero in the prefix, and no IPv6 (Azure Storage's IP rules take IPv4 only)."
+  }
+
+  validation {
+    condition     = alltrue([for c in var.storage.allowed_ip_ranges : !can(regex("/3[12]$", c))])
+    error_message = "Azure Storage does not take a /31 or /32 range in an IP rule: write each address in storage.allowed_ip_ranges on its own, without a prefix."
+  }
+
+  # The prefix is compared as a number once the entry has parsed; an entry that does not parse counts
+  # as wide (try falls back to false), so this check fails closed.
+  validation {
+    condition = alltrue([
+      for c in var.storage.allowed_ip_ranges : try(!strcontains(c, "/") || tonumber(split("/", c)[1]) >= 8, false)
+    ])
+    error_message = "storage.allowed_ip_ranges must not hold a range wider than a /8 (0.0.0.0/0 included): the account carries PHI. Name your SFTP clients' ranges."
+  }
+
+  # Ranges each narrow enough can still add up to most of the internet: since private ranges are
+  # refused, a list that covers every public address never reaches 2^32. So the whole list may hold
+  # no more addresses than one /8 (2^24), well under the public space and far more than any set of
+  # SFTP partners needs. Overlaps are counted twice, so the sum can only overstate the coverage.
+  validation {
+    condition = try(sum(concat([0], [
+      for c in distinct(var.storage.allowed_ip_ranges) : strcontains(c, "/") ? pow(2, 32 - tonumber(split("/", c)[1])) : 1
+    ])) <= pow(2, 24), false)
+    error_message = "The ranges in storage.allowed_ip_ranges add up to more addresses than one /8 (16,777,216): the account carries PHI. Name your SFTP clients' ranges."
+  }
+
+  # Two ranges overlap when the wider one holds the narrower one's first address.
+  validation {
+    condition = alltrue(flatten([
+      for c in var.storage.allowed_ip_ranges : [
+        for p in ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] : try(
+          !(
+            tonumber(strcontains(c, "/") ? split("/", c)[1] : "32") <= tonumber(split("/", p)[1])
+            ? cidrhost("${cidrhost(p, 0)}/${strcontains(c, "/") ? split("/", c)[1] : "32"}", 0) == cidrhost(strcontains(c, "/") ? c : "${c}/32", 0)
+            : cidrhost("${cidrhost(strcontains(c, "/") ? c : "${c}/32", 0)}/${split("/", p)[1]}", 0) == cidrhost(p, 0)
+          ),
+          false
+        )
+      ]
+    ]))
+    error_message = "storage.allowed_ip_ranges must not hold or overlap a private range (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16): Azure Storage's IP rules take public addresses only. Clients in your virtual network reach the account through its private endpoint."
+  }
+
+  validation {
+    condition     = var.storage.soft_delete_retention_days >= 1 && var.storage.soft_delete_retention_days <= 365 && floor(var.storage.soft_delete_retention_days) == var.storage.soft_delete_retention_days
+    error_message = "storage.soft_delete_retention_days must be a whole number from 1 to 365."
+  }
+
+  validation {
+    condition     = alltrue([for u in keys(var.storage.sftp_users) : can(regex("^[a-z][a-z0-9]{2,31}$", u))])
+    error_message = "Each storage.sftp_users name must be 3 to 32 lowercase letters and digits, starting with a letter."
+  }
+
+  validation {
+    condition     = alltrue([for u in values(var.storage.sftp_users) : length(u.ssh_public_keys) >= 1 && length(u.ssh_public_keys) <= 10])
+    error_message = "Each storage.sftp_users entry needs 1 to 10 SSH public keys: a user signs in with a key, never a password."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for u in values(var.storage.sftp_users) : [
+        for k in u.ssh_public_keys : can(regex("^[a-z][a-z0-9.@-]* [A-Za-z0-9+/]+={0,3}( [^\\r\\n]*)?$", k)) && !strcontains(upper(k), "PRIVATE KEY")
+      ]
+    ]))
+    error_message = "Each SSH key in storage.sftp_users must be one public key on one line, in OpenSSH form: its type (such as ssh-rsa), its base64 data and an optional comment. Never a private key."
+  }
+
+  validation {
+    condition = alltrue([
+      for u in values(var.storage.sftp_users) :
+      length(u.permissions) >= 1 && alltrue([for p in u.permissions : contains(["create", "write", "list", "read", "delete"], p)])
+    ])
+    error_message = "Each storage.sftp_users entry's permissions must be one or more of create, write, list, read and delete."
+  }
+
+  validation {
+    condition = !var.storage.enabled || alltrue([
+      for k in keys(var.environment_variables) :
+      !contains(["AZURE_CLIENT_ID", "PATHWAYS_AZBLOB_ACCOUNT", "PATHWAYS_AZBLOB_CONTAINER"], k) && !can(regex("^PATHWAYS_SFTP_.*_CONTAINER$", k))
+    ])
+    error_message = "With storage enabled, the module sets AZURE_CLIENT_ID, PATHWAYS_AZBLOB_ACCOUNT, PATHWAYS_AZBLOB_CONTAINER and PATHWAYS_SFTP_<USER>_CONTAINER on the app: do not pass them in environment_variables."
+  }
+}

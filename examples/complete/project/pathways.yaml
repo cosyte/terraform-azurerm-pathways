@@ -1,0 +1,22 @@
+# The project the example's image is built from (see Deploy the image in the Pathways docs). The
+# module sets every environment variable this file reads.
+
+# The module's PostgreSQL server, whose URL the app reads from the Key Vault. The server refuses a
+# connection without TLS.
+storage:
+  postgres:
+    url: { env: PATHWAYS_DATABASE_URL }
+    tls: {}
+
+# The master key, read from the Key Vault secret named in encryption_key_secrets.
+encryption:
+  keys:
+    - id: k2026-11
+      env: PATHWAYS_KEY_2026_11
+  current: k2026-11
+
+# Where the app's startup, liveness and readiness probes ask.
+probes:
+  port: 9091
+  host: 0.0.0.0
+  plaintext: true

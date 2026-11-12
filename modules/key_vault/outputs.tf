@@ -24,3 +24,10 @@ output "database_url_secret_id" {
 
   depends_on = [azurerm_role_assignment.identity_secrets_user]
 }
+
+output "data_plane_id" {
+  description = "The Key Vault's resource id, ready only once its private endpoint (when there is one) exists, so a module that writes to the vault's data plane, such as a key, waits for a way in."
+  value       = azurerm_key_vault.this.id
+
+  depends_on = [azurerm_private_endpoint.key_vault]
+}

@@ -3,6 +3,19 @@
 
 locals {
   tags = merge(var.tags, { "pathways-module" = "terraform-azurerm-pathways" })
+
+  # With storage on, what the app's channels read: the identity to sign in as (Azure's default chain
+  # reads AZURE_CLIENT_ID for a user-assigned identity), the account and the containers. Never a key.
+  storage_app_environment = merge(concat([{}], [
+    for s in module.storage : merge(
+      {
+        AZURE_CLIENT_ID           = module.identity.client_id
+        PATHWAYS_AZBLOB_ACCOUNT   = s.account_name
+        PATHWAYS_AZBLOB_CONTAINER = s.container
+      },
+      { for u, c in s.user_containers : "PATHWAYS_SFTP_${upper(u)}_CONTAINER" => c },
+    )
+  ])...)
 }
 
 # The identity the apps and the jobs run as.
@@ -83,7 +96,7 @@ module "container_apps" {
   drain_seconds                      = var.drain_seconds
   cpu                                = var.cpu
   memory                             = var.memory
-  environment_variables              = var.environment_variables
+  environment_variables              = merge(var.environment_variables, local.storage_app_environment)
   encryption_key_secrets             = var.encryption_key_secrets
   container_registry_server          = var.container_registry_server
   app_start_args                     = var.app_start_args
@@ -93,4 +106,31 @@ module "container_apps" {
   log_analytics_workspace_id         = module.logs.id
   key_vault_uri                      = module.key_vault.uri
   database_url_secret_id             = module.key_vault.database_url_secret_id
+}
+
+# Optional, off by default: a storage account with SFTP for partners' files and the engine's own
+# blobs, encrypted with a key from the Key Vault, its logs in the workspace, and blob data access for
+# the app's identity on each of its containers.
+module "storage" {
+  source = "./modules/storage"
+  count  = var.storage.enabled ? 1 : 0
+
+  name                          = var.name
+  resource_group_name           = var.resource_group_name
+  location                      = var.location
+  tags                          = local.tags
+  account_name                  = var.storage.account_name
+  container_name                = var.storage.container_name
+  replication_type              = var.storage.replication_type
+  sftp_enabled                  = var.storage.sftp_enabled
+  public_network_access_enabled = var.storage.public_network_access_enabled
+  allowed_ip_ranges             = var.storage.allowed_ip_ranges
+  private_endpoint_subnet_id    = var.storage.private_endpoint_subnet_id
+  private_dns_zone_id           = var.storage.private_dns_zone_id
+  customer_managed_key_enabled  = var.storage.customer_managed_key_enabled
+  key_vault_id                  = var.storage.customer_managed_key_enabled ? module.key_vault.data_plane_id : null
+  soft_delete_retention_days    = var.storage.soft_delete_retention_days
+  sftp_users                    = var.storage.sftp_users
+  blob_data_principal_id        = module.identity.principal_id
+  log_analytics_workspace_id    = module.logs.id
 }
