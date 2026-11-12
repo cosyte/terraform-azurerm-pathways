@@ -325,15 +325,43 @@ run "refuses_a_range_wider_than_a_slash_8" {
   expect_failures = [var.allowed_ip_ranges]
 }
 
-run "refuses_ranges_that_add_up_to_every_address" {
+# 231 ranges, none wider than a /8, none overlapping another or a private range, that together hold
+# every public unicast IPv4 address but 127.0.0.0/8: as open as 0.0.0.0/0, since IP rules take
+# public addresses only.
+run "refuses_ranges_that_cover_every_public_address" {
   command = plan
 
   variables {
     public_network_access_enabled = true
-    allowed_ip_ranges             = concat([for i in range(256) : "${i}.0.0.0/8" if !contains([10, 172, 192], i)], ["1.0.0.0/9", "1.128.0.0/9", "2.0.0.0/9", "2.128.0.0/9", "3.0.0.0/9", "3.128.0.0/9"])
+    allowed_ip_ranges             = concat([for i in range(1, 224) : "${i}.0.0.0/8" if !contains([10, 127, 172, 192], i)], ["172.0.0.0/12", "172.32.0.0/11", "172.64.0.0/10", "172.128.0.0/9", "192.0.0.0/9", "192.128.0.0/11", "192.160.0.0/13", "192.169.0.0/16", "192.170.0.0/15", "192.172.0.0/14", "192.176.0.0/12", "192.192.0.0/10"])
   }
 
   expect_failures = [var.allowed_ip_ranges]
+}
+
+run "refuses_ranges_that_add_up_to_more_than_a_slash_8" {
+  command = plan
+
+  variables {
+    public_network_access_enabled = true
+    allowed_ip_ranges             = ["11.0.0.0/8", "203.0.113.7"]
+  }
+
+  expect_failures = [var.allowed_ip_ranges]
+}
+
+run "accepts_ranges_that_add_up_to_a_slash_8" {
+  command = plan
+
+  variables {
+    public_network_access_enabled = true
+    allowed_ip_ranges             = ["11.0.0.0/9", "12.0.0.0/10", "13.0.0.0/10"]
+  }
+
+  assert {
+    condition     = length(azurerm_storage_account.this.network_rules[0].ip_rules) == 3
+    error_message = "Ranges that add up to exactly a /8 must plan."
+  }
 }
 
 run "refuses_an_ipv6_range" {

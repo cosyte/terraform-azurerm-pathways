@@ -172,7 +172,7 @@ run "refuses_an_ipv6_range" {
   expect_failures = [var.storage]
 }
 
-run "refuses_ranges_that_add_up_to_every_address" {
+run "refuses_ranges_that_cover_every_public_address" {
   command = plan
 
   variables {
@@ -181,7 +181,23 @@ run "refuses_ranges_that_add_up_to_every_address" {
       private_endpoint_subnet_id    = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/rg-example/providers/Microsoft.Network/virtualNetworks/vnet-example/subnets/snet-endpoints"
       private_dns_zone_id           = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/rg-example/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
       public_network_access_enabled = true
-      allowed_ip_ranges             = concat([for i in range(256) : "${i}.0.0.0/8" if !contains([10, 172, 192], i)], ["1.0.0.0/9", "1.128.0.0/9", "2.0.0.0/9", "2.128.0.0/9", "3.0.0.0/9", "3.128.0.0/9"])
+      allowed_ip_ranges             = concat([for i in range(1, 224) : "${i}.0.0.0/8" if !contains([10, 127, 172, 192], i)], ["172.0.0.0/12", "172.32.0.0/11", "172.64.0.0/10", "172.128.0.0/9", "192.0.0.0/9", "192.128.0.0/11", "192.160.0.0/13", "192.169.0.0/16", "192.170.0.0/15", "192.172.0.0/14", "192.176.0.0/12", "192.192.0.0/10"])
+    }
+  }
+
+  expect_failures = [var.storage]
+}
+
+run "refuses_ranges_that_add_up_to_more_than_a_slash_8" {
+  command = plan
+
+  variables {
+    storage = {
+      enabled                       = true
+      private_endpoint_subnet_id    = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/rg-example/providers/Microsoft.Network/virtualNetworks/vnet-example/subnets/snet-endpoints"
+      private_dns_zone_id           = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/rg-example/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+      public_network_access_enabled = true
+      allowed_ip_ranges             = ["11.0.0.0/8", "203.0.113.7"]
     }
   }
 
