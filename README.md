@@ -28,6 +28,7 @@ with a tutorial, how-to guides, a page per example and the reference of every in
 - [Use it](#use-it)
 - [Examples](#examples)
 - [Storage and SFTP](#storage-and-sftp)
+- [Alarms on the engine's metrics](#alarms-on-the-engines-metrics)
 - [What it costs](#what-it-costs)
 - [Limits we rely on](#limits-we-rely-on)
 - [Documentation](#documentation)
@@ -52,8 +53,9 @@ Container Apps limits it relies on when you plan rather than when you apply.
 **Not released.** The module is built and tested against mocked providers, and has not yet been
 applied to a real Azure subscription by us. Nothing here is published to a registry or tagged.
 
-Not in this release: alerts on the engine's own metrics wait for the metric names Pathways will
-publish. There are no alert rules yet.
+The alarms on the engine's own metrics are off by default, and their collector's configuration
+has not yet been run against a live collector: see
+[Alarms on the engine's metrics](#alarms-on-the-engines-metrics) for what is and is not alarmed.
 
 ---
 
@@ -83,6 +85,10 @@ publish. There are no alert rules yet.
   and the engine's own blobs, private by default, encrypted with a key from the Key Vault, with one
   container per SFTP user and blob data access for the app's identity. See
   [Storage and SFTP](#storage-and-sftp).
+- Optionally, off unless `alarms_enabled` is true: an OpenTelemetry collector beside the engine in
+  each replica, an Application Insights resource, and five Azure Monitor metric alerts on the
+  engine's own metrics that call your action group. See
+  [Alarms on the engine's metrics](#alarms-on-the-engines-metrics).
 
 It does not create the virtual network, its subnets or the private DNS zones: you pass their ids.
 [`examples/complete`](examples/complete) creates them too.
@@ -101,6 +107,8 @@ module under `modules/` can also be used on its own; its README says what it nee
 ├── outputs.tf           the root module's outputs
 ├── versions.tf          Terraform and provider versions
 ├── modules/
+│   ├── alarms/          optional: the health token, Application Insights, the collector's
+│   │                    configuration and five metric alerts
 │   ├── container_apps/  per slot: the environment, the Pathways app and the migrate job
 │   ├── database/        the PostgreSQL flexible server and the database URL
 │   ├── identity/        the managed identity the app and the jobs run as
@@ -225,7 +233,7 @@ plans it against mocked providers; nothing is applied.
 | Folder                                                  | Shape                                                   |
 | ------------------------------------------------------- | ------------------------------------------------------- |
 | [`basic`](examples/basic)                               | minimal: one private slot in a network you already have |
-| [`production`](examples/production)                     | one engine with a warm standby, zone-redundant database |
+| [`production`](examples/production)                     | a warm standby, zone-redundant database, alarms on      |
 | [`existing-network`](examples/existing-network)         | your own virtual network, looked up by name             |
 | [`existing-postgres`](examples/existing-postgres)       | a PostgreSQL server you already run                     |
 | [`mllp-only`](examples/mllp-only)                       | MLLP only, over TCP ingress, from named public senders  |
@@ -332,6 +340,64 @@ Check them before you rely on a point: the service changes.
 
 ---
 
+## Alarms on the engine's metrics
+
+Off by default. Set `alarms_enabled = true` with `alarms_action_group_id` (an action group you
+create) and `alarms_collector_image` (an OpenTelemetry collector with the `prometheus` receiver, the
+`filter`, `metricstransform` and `cumulativetodelta` processors and the `azuremonitor` exporter,
+such as the OpenTelemetry Collector Contrib image, pinned by digest):
+
+```hcl
+  alarms_enabled         = true
+  alarms_action_group_id = "<an action group id>"
+  alarms_collector_image = "otel/opentelemetry-collector-contrib:<version>@sha256:<digest>"
+```
+
+Your `pathways.yaml` then needs a health block on `alarms_health_port` (9090), with
+`plaintext: true`, no `host` (so it binds to 127.0.0.1) and no `auth` (so it reads its token from
+`PATHWAYS_HEALTH_TOKEN`, which the module sets):
+
+```yaml
+health:
+  port: 9090
+  plaintext: true
+```
+
+The module generates the health endpoint's bearer token with an ephemeral resource and writes it
+to the Key Vault in a write-only argument, so neither the plan nor the state holds it, and the app
+gives it to the engine and to the collector. The collector runs beside the engine in each replica,
+reads `/metrics` at 127.0.0.1 every 30 seconds, keeps five metrics, folds away every channel,
+destination and outcome label, and sends them to a workspace-based Application Insights resource
+with a connection string it reads from a second Key Vault secret. Five metric alerts call your
+action group when they fire and when they resolve.
+
+What is alarmed:
+
+| Alert                | Fires when                                                                                     | Input, default                          |
+| -------------------- | ---------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `store-down`         | no reading of `pathways_store_up` was 1 for that many minutes                                  | `alarms_store_down_minutes`, 5          |
+| `oldest-pending-age` | every reading of `pathways_oldest_pending_age_seconds` was above that for 5 minutes            | `alarms_oldest_pending_age_seconds`, 600 |
+| `queue-depth`        | every reading of `pathways_queue_depth`, over every destination, was above that for 5 minutes  | `alarms_queue_depth_threshold`, 1000    |
+| `refused-messages`   | more refused bodies than that in 15 minutes, all channels together                             | `alarms_refused_messages_threshold`, 0  |
+| `settled-failed`     | more messages than that settled as failed with a destination in 15 minutes                     | `alarms_settled_failed_threshold`, 0    |
+
+What is not alarmed, and where this differs from our AWS module:
+
+- **A stopped engine or collector.** Azure does not fire a metric alert on missing data, so
+  `store-down` fires only while the engine reports that it cannot read its database. Our AWS module
+  counts a missing minute as down; Azure Monitor's metric alerts cannot, and we do not fake it.
+- **A 2 minute store down window.** Azure takes a metric alert's window only from a fixed list, so
+  `alarms_store_down_minutes` is 1, 5, 15, 30 or 60, and defaults to 5 where the AWS module's is 2.
+- **Anything per channel or destination,** and the platform's own metrics: replica restarts, the
+  database server, the Key Vault.
+
+The collector's configuration is tested as data and has not yet been run against a live collector
+and Application Insights resource: check that the five `pathways_` metrics arrive before you rely
+on the alerts. [Turn on the alarms](https://docs.cosyte.com/terraform-azurerm-pathways/turn-on-the-alarms)
+says what to check, what each line costs and how to turn them off.
+
+---
+
 ## What it costs
 
 We give the drivers, not prices: Azure's pricing pages and your agreement with Microsoft set those.
@@ -351,6 +417,10 @@ We give the drivers, not prices: Azure's pricing pages and your agreement with M
 - **Private endpoints:** each one by the hour, and the data through it: one for the Key Vault when
   you use one, one for the storage account.
 - **Data transfer** out of the region.
+- **The alarms, when on:** the collector's 0.25 vCPU and 0.5 GiB beside each replica, five metric
+  alert rules (each billed per monitored time series per month), the metrics' rows in the
+  workspace (a few a minute per replica), the two Key Vault secrets' reads, and what your action
+  group sends, such as SMS. Nothing of it exists, or bills, with `alarms_enabled` off.
 
 ---
 
@@ -430,6 +500,11 @@ about your deployment: how you run it is yours to review.
   `0.0.0.0/0`. The firewall also lets Azure's trusted services through (`bypass = AzureServices`);
   each still needs a role on the account to read or write. Its SFTP users sign in with SSH keys only, each to its own
   container, and the engine with its managed identity: the account's shared keys are off.
+- With alarms on, the Application Insights resource keeps Azure's default public endpoints for
+  ingestion and query, as the workspace does. The collector sends with a connection string that
+  can only write telemetry; it is a Key Vault secret only the collector reads, and it is in the
+  Terraform state. The metrics it sends carry no channel or destination name and no message
+  content. The health endpoint listens on 127.0.0.1 inside each replica and asks for the token.
 - The database password is in the Terraform state (see [Applying](#applying)): keep the state
   encrypted and private.
 - No test or example applies to a real account: the tests plan against mocked providers and never

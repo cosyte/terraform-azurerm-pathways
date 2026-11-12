@@ -19,6 +19,28 @@ locals {
     }
   }
 
+  # With a metrics collector, two more Container App secrets from Key Vault: the health endpoint's
+  # token, which the engine and the collector read, and the Application Insights connection string,
+  # which only the collector reads.
+  collector                  = var.metrics_collector != null
+  health_token_secret        = "health-token"
+  connection_string_secret   = "metrics-connection-string"
+  health_token_variable      = "PATHWAYS_HEALTH_TOKEN"
+  connection_string_variable = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+  collector_config_variable  = "PATHWAYS_COLLECTOR_CONFIG"
+  collector_secrets = local.collector ? [
+    {
+      name        = local.health_token_secret
+      keyVaultUrl = var.metrics_collector.health_token_secret_id
+      identity    = var.identity_id
+    },
+    {
+      name        = local.connection_string_secret
+      keyVaultUrl = var.metrics_collector.connection_string_secret_id
+      identity    = var.identity_id
+    },
+  ] : []
+
   app_secrets = concat(
     [{
       name        = local.database_url_secret
@@ -30,13 +52,35 @@ locals {
       keyVaultUrl = k.url
       identity    = var.identity_id
     }],
+    local.collector_secrets,
   )
 
   app_env = concat(
     [{ name = "PATHWAYS_DATABASE_URL", secretRef = local.database_url_secret }],
     [for env_name, k in local.key_secrets : { name = env_name, secretRef = k.app_secret_name }],
     [for name, value in var.environment_variables : { name = name, value = value }],
+    local.collector ? [{ name = local.health_token_variable, secretRef = local.health_token_secret }] : [],
   )
+
+  # The metrics collector, beside the engine in each replica: it reads its configuration from
+  # PATHWAYS_COLLECTOR_CONFIG, the health token from PATHWAYS_HEALTH_TOKEN and the connection
+  # string from APPLICATIONINSIGHTS_CONNECTION_STRING, and scrapes the engine's /metrics over the
+  # replica's loopback. It has no ingress and no probe; its logs go to the environment's workspace
+  # with the engine's. Without it, the app runs the engine alone, as it always did.
+  collector_container = local.collector ? [{
+    name  = "metrics-collector"
+    image = var.metrics_collector.image
+    args  = ["--config=env:${local.collector_config_variable}"]
+    resources = {
+      cpu    = 0.25
+      memory = "0.5Gi"
+    }
+    env = [
+      { name = local.collector_config_variable, value = var.metrics_collector.config },
+      { name = local.health_token_variable, secretRef = local.health_token_secret },
+      { name = local.connection_string_variable, secretRef = local.connection_string_secret },
+    ]
+  }] : []
 
   ip_restrictions = [
     for i, cidr in var.ingress_allowed_cidrs : {
@@ -133,7 +177,7 @@ resource "azapi_resource" "app" {
       }
       template = {
         terminationGracePeriodSeconds = var.drain_seconds
-        containers = [{
+        containers = concat([{
           name  = "pathways"
           image = each.value.image
           args  = local.start_args
@@ -187,7 +231,7 @@ resource "azapi_resource" "app" {
               successThreshold    = 1
             },
           ]
-        }]
+        }], local.collector_container)
         # One engine per database: the engine lease refuses a second, or holds it as a standby. With
         # standby_replica the second replica is that standby, started with --standby.
         scale = {

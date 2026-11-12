@@ -12,10 +12,12 @@ A Terraform module is not installed: a configuration names it in a `module` bloc
 
 ## What you need
 
-- **Terraform 1.9 or later.** The module's variable checks read other variables, which 1.9 added.
-  Our CI runs the version pinned in the repository's `mise.toml`.
+- **Terraform 1.11 or later.** The module's variable checks read other variables, which 1.9 added,
+  and the alarms write their health token to the Key Vault through a write-only argument, which 1.11
+  added, so the token is never in the plan or the state. Our CI runs the version pinned in the
+  repository's `mise.toml`.
 - **The providers,** which `terraform init` installs: `hashicorp/azurerm` 4.42 or later below 5,
-  `azure/azapi` 2 or later below 3, and `hashicorp/random` 3.6 or later below 4. The app is written
+  `azure/azapi` 2 or later below 3, and `hashicorp/random` 3.7 or later below 4. The app is written
   through `azapi`, since `azurerm_container_app` does not expose TCP ingress with additional ports.
 - **An Azure subscription, and a sign-in that can assign roles in it.** The module creates role
   assignments (Key Vault Secrets User for the engine's identity, Key Vault Secrets Officer for

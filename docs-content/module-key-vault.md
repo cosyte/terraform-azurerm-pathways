@@ -233,7 +233,7 @@ Default: `{}`
 
 ## Outputs
 
-6 outputs, by name.
+7 outputs, by name.
 
 ### `data_plane_id`
 
@@ -254,6 +254,10 @@ The Key Vault's resource id.
 ### `name`
 
 The Key Vault's name.
+
+### `secrets_writer_id`
+
+The Key Vault's resource id, ready only once whoever applies holds Key Vault Secrets Officer on it and its private endpoint (when there is one) exists, so a module that writes a secret to the vault, such as the alarms module, waits for both.
 
 ### `uri`
 

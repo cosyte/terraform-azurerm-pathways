@@ -10,6 +10,7 @@
         "prepare-the-network",
         "store-files-in-blob-storage",
         "give-partners-sftp-access",
+        "turn-on-the-alarms",
         "upgrade-the-engine-and-the-module"
       ]
     },
@@ -27,6 +28,7 @@
           "type": "category",
           "label": "Modules",
           "items": [
+            "module-alarms",
             "module-container-apps",
             "module-database",
             "module-identity",

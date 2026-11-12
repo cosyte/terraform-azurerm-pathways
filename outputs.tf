@@ -71,3 +71,15 @@ output "storage" {
     }
   ])
 }
+
+output "alarms" {
+  description = "With alarms on: the ids of the five metric alerts by key (store_down, oldest_pending_age, queue_depth, refused_messages, settled_failed), the Application Insights resource the metrics go to, and the name of the Key Vault secret that holds the health token. Null with alarms off. The token itself is in no output, no plan and no state."
+  value = one([
+    for a in module.alarms : {
+      alarm_ids                   = a.alarm_ids
+      application_insights        = a.application_insights
+      health_token_secret_id      = a.health_token_secret_id
+      connection_string_secret_id = a.connection_string_secret_id
+    }
+  ])
+}

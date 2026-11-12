@@ -30,7 +30,7 @@ This page is generated from the code in `modules/container_apps/` by `scripts/do
 
 ## Inputs
 
-25 inputs, 8 of them required. The required ones come first, then the rest by name.
+26 inputs, 8 of them required. The required ones come first, then the rest by name.
 
 ### `database_url_secret_id`
 
@@ -315,6 +315,31 @@ string
 ```
 
 Default: `"2Gi"`
+
+### `metrics_collector`
+
+Optional.
+
+A metrics collector to run beside the engine in each replica of each slot's app, which reads the engine's /metrics over the replica's loopback: its image, pinned by digest; its configuration (passed as PATHWAYS\_COLLECTOR\_CONFIG and read with --config=env:PATHWAYS\_COLLECTOR\_CONFIG, as an OpenTelemetry collector takes it); and the versionless ids of two Key Vault secrets, the health endpoint's bearer token, which the app gives the engine and the collector as PATHWAYS\_HEALTH\_TOKEN, and the Application Insights connection string, which it gives the collector as APPLICATIONINSIGHTS\_CONNECTION\_STRING. The collector takes 0.25 vCPU and 0.5Gi beside the engine's cpu and memory. The migrate job does not get it. Null, the default, runs the engine alone.
+
+Type:
+
+```hcl
+object({
+  image                       = string
+  config                      = string
+  health_token_secret_id      = string
+  connection_string_secret_id = string
+})
+```
+
+Default: `null`
+
+The plan refuses a value that breaks one of these rules, with its message:
+
+- metrics\_collector.image must be pinned by digest: registry/repository:tag@sha256:\<64 hex digits\>.
+- With metrics\_collector the engine reads PATHWAYS\_HEALTH\_TOKEN from its Key Vault secret: leave it out of environment\_variables and encryption\_key\_secrets.
+- With metrics\_collector, cpu must be 3.75 or less: the collector takes 0.25 vCPU, and an app on the Consumption profile gets 4 vCPU at most.
 
 ### `migrate_args`
 

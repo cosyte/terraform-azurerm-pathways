@@ -15,6 +15,7 @@ description: "One slot for production: one engine working, a second replica as i
 - The PostgreSQL server `psql-pw-prod`: `GP_Standard_D4ds_v5`, 128 GiB, 35 days of backups, its primary in zone 1 and a high-availability standby in zone 2 that Azure fails over to, and a Microsoft Entra group as its administrator.
 - The app `pw-prod-blue` with `standby_replica = true`: two replicas of 2 vCPU and 4 GiB, both started with `--standby`. The first to ask takes the engine lease and runs every channel; the other holds no lease, opens no listener and answers `/readyz` with 503 `standby`, so the ingress sends it nothing. When the working engine stops, the standby takes over within about 20 seconds with the default lease.
 - The engine starts with `--no-migrate`, so schema changes run only from the migrate job `pw-prod-blue-migrate`.
+- Alarms on the engine's own metrics: a metrics collector beside the engine in each replica, an Application Insights resource `appi-pw-prod` on the workspace, and five metric alerts (store down, oldest pending age, queue depth, refused messages, settled destinations failing) that call the action group you name. Your `pathways.yaml` needs a `health` block on port 9090 with `plaintext: true`; see [the alarms](./turn-on-the-alarms.md).
 - Every network id is a variable: the network is yours.
 
 ## When to choose it
@@ -30,10 +31,12 @@ with Microsoft, set those.
 - The PostgreSQL server's compute twice over, for the high-availability standby, and 128 GiB of storage.
 - Log Analytics retention for 365 days, past the included days.
 - The Key Vault's private endpoint, Key Vault operations, the migrate job while it runs, and data transfer out of the region.
+- The alarms: the collector's 0.25 vCPU and 0.5 GiB beside each replica, five metric alert rules, the metrics' data in the workspace (a few rows a minute), the health token's and the connection string's reads from Key Vault, and whatever your action group sends, such as SMS.
 
 ## What it does not cover
 
 - A region lost: the engine, the database and its standby are in one region. The [geo-redundant backup example](./example-geo-redundant-backup.md) keeps the backups in a second one.
+- An engine or a collector that stops reporting: Azure does not fire a metric alert on missing data, so the store down alert fires only while the engine reports that it cannot read its database.
 - Several engines working at once: one engine holds the lease, and the standby only waits. See [multi-node](./example-multi-node.md).
 - We have not yet confirmed against a live environment that Container Apps' TCP ingress sends nothing to a replica whose readiness probe fails, or how a new revision whose replicas start as standbys replaces the old one. Test both before you rely on them.
 
@@ -56,6 +59,7 @@ One slot for production traffic: one engine working and a second replica waiting
 - The PostgreSQL server `psql-pw-prod`: `GP_Standard_D4ds_v5`, 128 GiB, 35 days of backups, its primary in zone 1 and a high-availability standby in zone 2 that Azure fails over to, and a Microsoft Entra group as its administrator.
 - The app `pw-prod-blue` with `standby_replica = true`: two replicas of 2 vCPU and 4 GiB, both started with `--standby`. The first to ask takes the engine lease and runs every channel; the other holds no lease, opens no listener and answers `/readyz` with 503 `standby`, so the ingress sends it nothing. When the working engine stops, the standby takes over within about 20 seconds with the default lease.
 - The engine starts with `--no-migrate`, so schema changes run only from the migrate job `pw-prod-blue-migrate`.
+- Alarms on the engine's own metrics: a metrics collector beside the engine in each replica, an Application Insights resource `appi-pw-prod` on the workspace, and five metric alerts (store down, oldest pending age, queue depth, refused messages, settled destinations failing) that call the action group you name. Your `pathways.yaml` needs a `health` block on port 9090 with `plaintext: true`; see [the alarms](../../README.md#alarms-on-the-engines-metrics).
 - Every network id is a variable: the network is yours.
 
 ## When to choose it
@@ -71,10 +75,12 @@ with Microsoft, set those.
 - The PostgreSQL server's compute twice over, for the high-availability standby, and 128 GiB of storage.
 - Log Analytics retention for 365 days, past the included days.
 - The Key Vault's private endpoint, Key Vault operations, the migrate job while it runs, and data transfer out of the region.
+- The alarms: the collector's 0.25 vCPU and 0.5 GiB beside each replica, five metric alert rules, the metrics' data in the workspace (a few rows a minute), the health token's and the connection string's reads from Key Vault, and whatever your action group sends, such as SMS.
 
 ## What it does not cover
 
 - A region lost: the engine, the database and its standby are in one region. The [geo-redundant backup example](../geo-redundant-backup) keeps the backups in a second one.
+- An engine or a collector that stops reporting: Azure does not fire a metric alert on missing data, so the store down alert fires only while the engine reports that it cannot read its database.
 - Several engines working at once: one engine holds the lease, and the standby only waits. See [multi-node](../multi-node).
 - We have not yet confirmed against a live environment that Container Apps' TCP ingress sends nothing to a replica whose readiness probe fails, or how a new revision whose replicas start as standbys replaces the old one. Test both before you rely on them.
 
@@ -94,8 +100,8 @@ terraform plan
 ```hcl title="examples/production/main.tf"
 # Pathways for production on one slot: one engine working and a second replica waiting as its warm
 # standby, a zone-redundant PostgreSQL server with a standby of its own in a second zone, a year of
-# logs, and the master key and the database URL in a Key Vault reached only through its private
-# endpoint. It runs in a virtual network you already have, named by id. Every name, id and range
+# logs, the master key and the database URL in a Key Vault reached only through its private
+# endpoint, and alerts on the engine's own metrics to an action group you already have. It runs in a virtual network you already have, named by id. Every name, id and range
 # here is a placeholder: replace them with your own. Nothing in this example is applied by our CI.
 
 provider "azurerm" {
@@ -141,6 +147,16 @@ variable "key_vault_private_dns_zone_id" {
 variable "sender_cidrs" {
   description = "The address ranges your MLLP senders connect from, inside or connected to the virtual network."
   type        = list(string)
+}
+
+variable "alarms_action_group_id" {
+  description = "The resource id of the Azure Monitor action group the alerts call: who is told, and how."
+  type        = string
+}
+
+variable "metrics_collector_image" {
+  description = "An OpenTelemetry collector image with the prometheus receiver, the filter, metricstransform and cumulativetodelta processors and the azuremonitor exporter, such as the OpenTelemetry Collector Contrib image, pinned by digest."
+  type        = string
 }
 
 variable "database_administrators" {
@@ -211,6 +227,14 @@ module "pathways" {
     private_dns_zone_id        = var.key_vault_private_dns_zone_id
   }
 
+  # Alerts on the engine's own metrics. pathways.yaml's health block listens on 127.0.0.1:9090 with
+  # plaintext: true and no auth, so it reads its token from PATHWAYS_HEALTH_TOKEN, which the module
+  # sets; the collector beside the engine reads /metrics there and sends five metrics to Application
+  # Insights. Each alert calls the action group on firing and on resolving.
+  alarms_enabled         = true
+  alarms_action_group_id = var.alarms_action_group_id
+  alarms_collector_image = var.metrics_collector_image
+
   tags = {
     environment = "production"
   }
@@ -224,6 +248,11 @@ output "slots" {
 output "postgres" {
   description = "The PostgreSQL server's host name, database and administrator login."
   value       = module.pathways.postgres
+}
+
+output "alarms" {
+  description = "The five metric alerts' ids and the Application Insights resource the metrics go to."
+  value       = module.pathways.alarms
 }
 ```
 
@@ -260,6 +289,8 @@ variables {
   endpoints_subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-network-example/providers/Microsoft.Network/virtualNetworks/vnet-example/subnets/snet-endpoints"
   key_vault_private_dns_zone_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-network-example/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
   sender_cidrs                  = ["10.20.0.0/16"]
+  alarms_action_group_id        = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-pathways-prod/providers/Microsoft.Insights/actionGroups/ag-pathways-example"
+  metrics_collector_image       = "registry.example.com/otel/collector:0.0.0@sha256:1111111111111111111111111111111111111111111111111111111111111111"
   database_administrators = {
     object_id      = "00000000-0000-0000-0000-000000000004"
     principal_name = "pathways-db-admins"
@@ -278,6 +309,11 @@ run "plans_one_engine_with_a_warm_standby_and_a_zone_redundant_database" {
     condition     = output.postgres.administrator_login == "pathways_admin"
     error_message = "The production example must make its PostgreSQL server."
   }
+
+  assert {
+    condition     = sort(keys(output.alarms.alarm_ids)) == tolist(["oldest_pending_age", "queue_depth", "refused_messages", "settled_failed", "store_down"])
+    error_message = "The production example must turn the alarms on: five metric alerts."
+  }
 }
 ```
 
@@ -285,7 +321,7 @@ run "plans_one_engine_with_a_warm_standby_and_a_zone_redundant_database" {
 
 ```hcl title="examples/production/versions.tf"
 terraform {
-  required_version = ">= 1.9.0"
+  required_version = ">= 1.11.0"
 
   required_providers {
     azurerm = {
@@ -298,7 +334,7 @@ terraform {
     }
     random = {
       source  = "hashicorp/random"
-      version = ">= 3.6.0, < 4.0.0"
+      version = ">= 3.7.0, < 4.0.0"
     }
   }
 }
