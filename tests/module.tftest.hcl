@@ -38,6 +38,11 @@ variables {
     delegated_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/rg-example/providers/Microsoft.Network/virtualNetworks/vnet-example/subnets/snet-postgres"
     private_dns_zone_id = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/rg-example/providers/Microsoft.Network/privateDnsZones/example.postgres.database.azure.com"
   }
+
+  key_vault = {
+    private_endpoint_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/rg-example/providers/Microsoft.Network/virtualNetworks/vnet-example/subnets/snet-endpoints"
+    private_dns_zone_id        = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/rg-example/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+  }
 }
 
 run "defaults_are_private_and_encrypted_in_transit" {
@@ -89,8 +94,8 @@ run "defaults_are_private_and_encrypted_in_transit" {
   }
 
   assert {
-    condition     = length(azurerm_private_endpoint.key_vault) == 0
-    error_message = "No private endpoint is created unless a subnet is named."
+    condition     = azapi_resource.app["blue"].body.properties.configuration.ingress.ipSecurityRestrictions == []
+    error_message = "An internal environment with no allowed ranges adds no address restriction."
   }
 }
 
@@ -134,8 +139,18 @@ run "app_has_tcp_ingress_probes_secrets_and_grace_period" {
   }
 
   assert {
-    condition     = alltrue([for p in azapi_resource.app["blue"].body.properties.template.containers[0].probes : p.httpGet.port == 9091])
-    error_message = "Both probes must ask the probe listener's port."
+    condition     = sort([for p in azapi_resource.app["blue"].body.properties.template.containers[0].probes : p.type]) == tolist(["Liveness", "Readiness", "Startup"])
+    error_message = "All three probes must be declared: the platform's defaults are TCP checks on the MLLP port."
+  }
+
+  assert {
+    condition     = [for p in azapi_resource.app["blue"].body.properties.template.containers[0].probes : p.httpGet.path if p.type == "Startup"] == ["/livez"]
+    error_message = "The startup probe must ask /livez, which answers live while the engine starts."
+  }
+
+  assert {
+    condition     = alltrue([for p in azapi_resource.app["blue"].body.properties.template.containers[0].probes : p.httpGet.port == 9091 && p.httpGet.scheme == "HTTP"])
+    error_message = "Every probe must ask the probe listener's port over HTTP."
   }
 
   assert {
@@ -261,7 +276,130 @@ run "entra_administrator_and_private_endpoint_when_named" {
   }
 }
 
+run "a_public_environment_admits_only_the_allowed_ranges" {
+  command = plan
+
+  variables {
+    internal_load_balancer_enabled = false
+    ingress_allowed_cidrs          = ["198.51.100.0/24", "203.0.113.8/29"]
+  }
+
+  assert {
+    condition     = azurerm_container_app_environment.this["blue"].internal_load_balancer_enabled == false
+    error_message = "The environment must be public when the internal load balancer is off."
+  }
+
+  assert {
+    condition     = [for r in azapi_resource.app["blue"].body.properties.configuration.ingress.ipSecurityRestrictions : r.ipAddressRange] == ["198.51.100.0/24", "203.0.113.8/29"]
+    error_message = "The app's address restrictions must be the ranges in ingress_allowed_cidrs, in order."
+  }
+
+  assert {
+    condition     = alltrue([for r in azapi_resource.app["blue"].body.properties.configuration.ingress.ipSecurityRestrictions : r.action == "Allow"])
+    error_message = "Each allowed range must be an Allow rule, so every other address is denied."
+  }
+}
+
+run "any_address_only_with_the_explicit_opt_in" {
+  command = plan
+
+  variables {
+    internal_load_balancer_enabled     = false
+    ingress_allowed_cidrs              = ["0.0.0.0/0"]
+    unsafe_allow_mllp_from_any_address = true
+  }
+
+  assert {
+    condition     = [for r in azapi_resource.app["blue"].body.properties.configuration.ingress.ipSecurityRestrictions : r.ipAddressRange] == ["0.0.0.0/0"]
+    error_message = "With the opt-in, the any-address range must pass through as asked."
+  }
+}
+
+run "a_key_vault_reached_over_its_public_endpoint_needs_no_private_endpoint" {
+  command = plan
+
+  variables {
+    key_vault = {
+      public_network_access_enabled = true
+      allowed_ip_ranges             = ["198.51.100.10/32"]
+    }
+  }
+
+  assert {
+    condition     = length(azurerm_private_endpoint.key_vault) == 0
+    error_message = "No private endpoint is created unless a subnet is named."
+  }
+
+  assert {
+    condition     = toset(azurerm_key_vault.this.network_acls[0].ip_rules) == toset(["198.51.100.10/32"])
+    error_message = "The vault must admit only the listed ranges."
+  }
+}
+
+# Unsafe inputs, refused at plan time.
+
+run "refuses_a_public_environment_with_no_allowed_ranges" {
+  command = plan
+
+  variables {
+    internal_load_balancer_enabled = false
+  }
+
+  expect_failures = [var.internal_load_balancer_enabled]
+}
+
+run "refuses_the_ipv4_any_address_range" {
+  command = plan
+
+  variables {
+    internal_load_balancer_enabled = false
+    ingress_allowed_cidrs          = ["198.51.100.0/24", "0.0.0.0/0"]
+  }
+
+  expect_failures = [var.ingress_allowed_cidrs]
+}
+
+run "refuses_the_ipv6_any_address_range" {
+  command = plan
+
+  variables {
+    ingress_allowed_cidrs = ["::/0"]
+  }
+
+  expect_failures = [var.ingress_allowed_cidrs]
+}
+
+run "refuses_a_key_vault_nothing_can_reach" {
+  command = plan
+
+  variables {
+    key_vault = {}
+  }
+
+  expect_failures = [var.key_vault]
+}
+
 # The documented limits, refused at plan time.
+
+run "refuses_port_80" {
+  command = plan
+
+  variables {
+    mllp_ports = [80]
+  }
+
+  expect_failures = [var.mllp_ports]
+}
+
+run "refuses_port_443" {
+  command = plan
+
+  variables {
+    mllp_ports = [2575, 443]
+  }
+
+  expect_failures = [var.mllp_ports]
+}
 
 run "refuses_more_than_six_ports" {
   command = plan
